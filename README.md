@@ -2,7 +2,7 @@
 
 基于 VLM 的移动端自动化测试框架。
 
-采用双模型架构：**操作模型**（如 AutoGLM）负责手机操作（点击、滑动、输入），**VLM**（视觉语言模型）负责截图断言，实现"操作"与"验证"的分离。
+采用双模型架构：**操作模型**（如 AutoGLM）负责手机操作（点击、滑动、输入），**VLM**（视觉语言模型）负责截图断言，实现"操作"与"验证"的分离。内置 **Action 缓存**机制，对重复操作自动跳过 API 调用，降低延迟和成本。
 
 ## 环境准备
 
@@ -225,12 +225,17 @@ tasks:
   - name: 横幅验证
     flow:
       - action: "打开今日头条 App"
+        cache_key: "launch:toutiao"
         timeout: 15
       - action: "点击推荐页面中的第一篇文章"
+        cache_key: "tap:first_article"
       - action: "点击评论图标进入评论区"
+        cache_key: "tap:comment_entry"
       - assert: "评论区顶部出现了一个红色横幅"
         severity: critical
 ```
+
+`cache_key` 为可选字段，格式为 `"动作:目标"`（如 `tap:comment_button`、`launch:toutiao`、`swipe:up`）。相同语义的操作在首次执行后会被缓存，后续执行时自动跳过 API 调用。
 
 ### 模式 2：自然语言生成 YAML
 
@@ -272,7 +277,7 @@ python main.py interactive --device-type adb
 ## CLI 参数
 
 ```
-python main.py run <yaml_path> [--device-type adb] [--device-id ID] [-v]
+python main.py run <yaml_path> [--device-type adb] [--device-id ID] [--no-cache] [-v]
 python main.py generate <description> [-o OUTPUT] [--device-type android|harmony|ios] [-v]
 python main.py interactive [--device-type adb] [--device-id ID] [-v]
 ```
@@ -281,6 +286,7 @@ python main.py interactive [--device-type adb] [--device-id ID] [-v]
 |---|---|
 | `--device-type` | 设备类型，默认 adb（Android） |
 | `--device-id` | 指定设备 ID，不指定则自动检测 |
+| `--no-cache` | 禁用 Action 缓存 |
 | `-v, --verbose` | 输出详细调试日志 |
 | `-o, --output` | generate 模式的输出文件路径 |
 
@@ -295,9 +301,41 @@ python main.py interactive [--device-type adb] [--device-id ID] [-v]
 ├── executor/            # 操作执行器 + 模型适配层
 ├── asserter/            # VLM 视觉断言
 ├── device/              # 设备抽象层（ADB）
+├── cache/               # Action 缓存（embedding 语义匹配 + pHash 视觉验证）
 ├── screenshot/          # 截图管理
 ├── runner.py            # 测试编排与容错重试
 ├── suite.py             # 数据模型（TestCase、TestSuite 等）
 ├── examples/            # 示例 YAML 用例
 └── tests/               # 测试脚本
+```
+
+## Action 缓存
+
+AutoQA 内置 Action 缓存机制，对重复的操作自动跳过模型 API 调用，降低延迟（每次命中节省 2-3 秒）和成本。
+
+### 工作原理
+
+缓存采用三层查找：
+
+1. **精确过滤**：按 App 包名筛选候选条目（零成本）
+2. **语义匹配**：本地 embedding 余弦相似度匹配 cache_key（`sentence-transformers`，<5ms）
+3. **视觉验证**：对比坐标区域 pHash，防止 UI 变更后误命中
+
+首次执行某操作时正常调用 API，成功后自动写入缓存（SQLite 持久化）。后续相同操作直接从缓存执行，跳过 API。
+
+### 配置
+
+`config.yaml` 中的缓存配置：
+
+```yaml
+cache:
+  enabled: true                    # 是否启用缓存
+  similarity_threshold: 0.85       # embedding 相似度阈值
+  ttl_days: 30                     # 缓存过期天数
+```
+
+运行时可通过 `--no-cache` 禁用：
+
+```bash
+python main.py run examples/test.yaml --no-cache
 ```
