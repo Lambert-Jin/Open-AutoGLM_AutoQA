@@ -1,0 +1,34 @@
+name: 今日头条评论区测试
+device:
+  type: android
+config:
+  action_model:
+    provider: autoglm
+    base_url: ${AUTOGLM_BASE_URL}
+    api_key: ${AUTOGLM_API_KEY}
+    model: autoglm-phone
+  vlm:
+    provider: gemini
+    api_key: ${GEMINI_API_KEY}
+    model: gemini-2.5-flash
+tasks:
+- name: 今日头条激励任务完成及状态检查
+  flow:
+  - action: 打开今日头条App
+    cache_key: launch:toutiao
+    timeout: 15
+  - action: 点击底部导航栏的'我的'
+    cache_key: tap:me_tab
+  - action: 点击'创作中心'
+    cache_key: tap:creator_center
+  - action: 找到"发日常微头条笔记"，点击'去完成'按钮
+    cache_key: tap:go_to_complete_button
+  - action: 按照任务要求完成"发日常微头条笔记"任务并发布
+    cache_key: tap:complete_task
+  - action: 返回到'我的'页面
+    cache_key: back:me_tab
+  - action: 点击'创作中心'
+    cache_key: tap:creator_center
+  - action: 找到"发日常微头条笔记"
+    cache_key: scoll:task
+  - assert: 检查"发日常微头条笔记"右边按钮显示为'审核中'

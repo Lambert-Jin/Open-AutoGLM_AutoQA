@@ -58,7 +58,7 @@ def _setup_logging(verbose: bool):
         datefmt="%H:%M:%S",
     )
     level = logging.DEBUG if verbose else logging.INFO
-    for module in ("executor", "runner", "asserter", "planner", "screenshot", "config", "device", "cache"):
+    for module in ("executor", "runner", "asserter", "planner", "screenshot", "config", "device", "cache", "describer"):
         logging.getLogger(module).setLevel(level)
 
 
@@ -105,8 +105,12 @@ def run_test(args):
     if cache_config.enabled and not args.no_cache:
         action_cache = _create_action_cache(cache_config)
 
+    # 初始化 PageDescriber（复用 VLM 配置）
+    from describer import PageDescriber
+    page_describer = PageDescriber(vlm_config) if vlm_config else None
+
     # 组装
-    executor = TestExecutor(model=action_model, device=device, action_cache=action_cache)
+    executor = TestExecutor(model=action_model, device=device, action_cache=action_cache, page_describer=page_describer)
     asserter = Asserter(vlm_config)
     screenshot_mgr = ScreenshotManager(device=device)
 
@@ -216,8 +220,12 @@ def interactive_test(args):
         custom_rules=model_config.custom_rules,
     )
 
+    # 初始化 PageDescriber（复用 VLM 配置）
+    from describer import PageDescriber
+    page_describer = PageDescriber(vlm_config) if vlm_config else None
+
     # 组装
-    executor = TestExecutor(model=action_model, device=device)
+    executor = TestExecutor(model=action_model, device=device, page_describer=page_describer)
     asserter = Asserter(vlm_config)
     screenshot_mgr = ScreenshotManager(device=device)
     runner = TestRunner(executor, asserter, screenshot_mgr)

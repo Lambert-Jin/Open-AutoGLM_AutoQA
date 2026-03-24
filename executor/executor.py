@@ -1,17 +1,20 @@
-"""TestExecutor：自管理对话上下文，依赖 ActionModel + Device"""
+"""TestExecutor：步骤级上下文隔离，依赖 ActionModel + Device"""
 
 from __future__ import annotations
 
 import logging
 import time
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from device import Device
 from device.errors import ScreenshotSensitiveError
 from executor.actions import ActionType, UnifiedAction
 from executor.action_executor import ActionExecutor, ActionExecuteResult as _AER
 from executor.model_protocol import ActionModel
+
+if TYPE_CHECKING:
+    from describer import PageDescriber
 
 logger = logging.getLogger(__name__)
 
@@ -29,15 +32,14 @@ class TestExecutor:
     """
     测试执行器。
 
-    改造后的变化（对比旧版）：
-    - 不再依赖 phone_agent 的任何组件
-    - 通过 ActionModel 协议适配不同模型
-    - 通过 Device 协议操作设备
-    - 去掉 _suppress_stdout() hack（BaseModelClient 用 logging，不 print）
-    - 上下文窗口管理（防止 token 溢出）
+    上下文策略：步骤级隔离 + VLM 页面描述跨步骤传递
+    - 每个 execute_action() 调用独立维护上下文（system prompt + 当前步骤对话）
+    - 步骤间不共享完整历史，避免前序步骤的残留信息误导模型
+    - 通过 PageDescriber（VLM）分析每步截图，将页面关键信息传递给下一步
+    - 解决跨页面语义丢失问题（如"完成任务"需要知道前一页看到的任务内容）
     """
 
-    MAX_CONTEXT_TURNS = 15  # 最多保留的对话轮次（1 轮 = 1 user + 1 assistant）
+    MAX_ROUNDS_PER_STEP = 15  # 单步骤内最多对话轮次
 
     def __init__(
         self,
@@ -46,6 +48,7 @@ class TestExecutor:
         max_steps_per_action: int = 10,
         action_cache: ActionCache | None = None,
         post_action_delay: float = 1.0,
+        page_describer: PageDescriber | None = None,
     ):
         self.model = model
         self.device = device
@@ -54,28 +57,44 @@ class TestExecutor:
         self.max_steps = max_steps_per_action
         self.action_cache = action_cache
         self.post_action_delay = post_action_delay  # 动作执行后等待页面加载的延迟（秒）
-        self._context: list[dict[str, Any]] = []
+        self.page_describer = page_describer
+        self._system_prompt: str = ""  # 缓存 system prompt，避免重复获取
+        self._last_page_description: str = ""  # 上一步的页面描述，传递给下一步
 
     def execute_action(self, description: str, cache_key: str = "") -> ExecutorActionResult:
         """
         执行一个语义级操作步骤。
 
         内部多轮循环直到模型返回 finish 或达到 max_steps。
-        每次调用都能注入新的任务描述到已有上下文。
+        每次调用创建独立上下文，步骤间互不干扰。
         """
         actions_taken: list[dict] = []
         verbose = logger.isEnabledFor(logging.DEBUG)
+        original_description = description  # 保留原始描述用于日志
 
-        # system prompt（仅首次）
-        if not self._context:
-            self._context.append({
-                "role": "system",
-                "content": self.model.get_system_prompt(),
-            })
+        # 每步独立上下文：system prompt + 当前步骤对话
+        if not self._system_prompt:
+            self._system_prompt = self.model.get_system_prompt()
+        context: list[dict[str, Any]] = [
+            {"role": "system", "content": self._system_prompt},
+        ]
 
         # 截图 + 构造消息
         screenshot = self.device.screenshot()
         current_app = self.device.current_app()
+
+        # ── 页面描述（跨步骤传递）──
+        # 无论缓存是否命中都要 describe，因为下一步可能需要这一步的页面信息
+        current_page_description = ""
+        if self.page_describer:
+            try:
+                current_page_description = self.page_describer.describe(screenshot)
+            except Exception as e:
+                logger.warning("页面描述失败: %s", e)
+
+        # 将【上一步】的页面描述附加到当前步骤的 description
+        if self._last_page_description:
+            description = f"{description}\n\n<上一个页面的内容>\n{self._last_page_description}\n</上一个页面的内容>"
 
         # ── 缓存快速路径 ──
         if cache_key and self.action_cache:
@@ -101,6 +120,7 @@ class TestExecutor:
                 cache_result = self.action_executor.execute(cache_action)
                 if cache_result.success:
                     self.action_cache.record_hit(cached.entry)
+                    self._last_page_description = current_page_description
                     return ExecutorActionResult(
                         success=True,
                         actions_taken=[{"type": params["action_type"], "x": params["x"], "y": params["y"]}],
@@ -112,7 +132,7 @@ class TestExecutor:
         initial_screenshot = screenshot  # 缓存写回用
         screen_info = self.model.build_screen_info(current_app)
 
-        self._context.append(
+        context.append(
             self.model.build_user_message(
                 text=f"{description}\n\n{screen_info}",
                 image_base64=screenshot.base64_data,
@@ -123,11 +143,11 @@ class TestExecutor:
 
         for round_num in range(self.max_steps):
             if verbose:
-                self._log_request(round_num + 1)
+                self._log_request(context, round_num + 1)
 
             # 调用模型
             try:
-                output = self.model.call(self._context)
+                output = self.model.call(context)
             except Exception as e:
                 logger.error("模型调用失败: %s", e)
                 return ExecutorActionResult(
@@ -142,14 +162,15 @@ class TestExecutor:
                 self._log_response(round_num + 1, action, output)
 
             # 更新上下文：移除旧图片 + 添加 assistant 回复
-            self._context[-1] = self.model.remove_images(self._context[-1])
-            self._context.append(
+            context[-1] = self.model.remove_images(context[-1])
+            context.append(
                 self.model.build_assistant_message(output.raw_content)
             )
 
             # finish → 步骤完成
             if action.is_finish:
-                logger.info("步骤完成: %s (共 %d 轮)", description, round_num + 1)
+                logger.info("步骤完成: %s (共 %d 轮)", original_description, round_num + 1)
+                self._last_page_description = current_page_description
                 exec_result = ExecutorActionResult(
                     success=True, actions_taken=actions_taken,
                     rounds=round_num + 1,
@@ -169,6 +190,7 @@ class TestExecutor:
             })
 
             if result.should_finish:
+                self._last_page_description = current_page_description
                 exec_result = ExecutorActionResult(
                     success=result.success, actions_taken=actions_taken,
                     rounds=round_num + 1, error=result.message,
@@ -178,9 +200,6 @@ class TestExecutor:
                     current_app, initial_screenshot,
                 )
                 return exec_result
-
-            # 上下文窗口管理（防止 token 溢出）
-            self._trim_context()
 
             # 等待页面加载后再截图
             if self.post_action_delay > 0:
@@ -193,7 +212,7 @@ class TestExecutor:
                 # 敏感屏幕（支付/安全页面）：使用上次的截图尺寸，不发图片
                 current_app = self.device.current_app()
                 screen_info = self.model.build_screen_info(current_app)
-                self._context.append(
+                context.append(
                     self.model.build_user_message(
                         text=f"** Screen Info **\n{screen_info}\n"
                              "⚠️ 当前页面截图受限（可能是支付/安全页面），请根据之前的上下文继续操作",
@@ -204,7 +223,7 @@ class TestExecutor:
             current_app = self.device.current_app()
             screen_info = self.model.build_screen_info(current_app)
 
-            self._context.append(
+            context.append(
                 self.model.build_user_message(
                     text=f"** Screen Info **\n{screen_info}",
                     image_base64=screenshot.base64_data,
@@ -213,6 +232,7 @@ class TestExecutor:
                 )
             )
 
+        self._last_page_description = current_page_description
         return ExecutorActionResult(
             success=False, actions_taken=actions_taken,
             rounds=self.max_steps, error="max_steps exceeded",
@@ -231,9 +251,10 @@ class TestExecutor:
         return result.success
 
     def reset(self):
-        """重置上下文（切换 TestCase 时调用）"""
-        self._context = []
-        logger.debug("Executor 上下文已重置")
+        """重置状态（切换 TestCase 时调用）"""
+        self._system_prompt = ""
+        self._last_page_description = ""
+        logger.debug("Executor 已重置")
 
     def _maybe_cache_action(
         self,
@@ -281,43 +302,29 @@ class TestExecutor:
         except Exception as e:
             logger.warning("缓存写入失败: %s", e)
 
-    def _trim_context(self):
-        """
-        上下文窗口管理：保留 system prompt + 最近 N 轮对话，防止 token 溢出。
-        """
-        if not self._context:
-            return
-
-        system = [self._context[0]] if self._context[0].get("role") == "system" else []
-        messages = self._context[len(system):]
-
-        max_messages = self.MAX_CONTEXT_TURNS * 2
-        if len(messages) > max_messages:
-            trimmed = len(messages) - max_messages
-            logger.debug("裁剪上下文：移除 %d 条旧消息，保留最近 %d 轮",
-                         trimmed, self.MAX_CONTEXT_TURNS)
-            messages = messages[-max_messages:]
-            self._context = system + messages
-
-    def _log_request(self, round_num: int):
+    @staticmethod
+    def _log_request(context: list[dict], round_num: int):
         last_user = next(
-            (m for m in reversed(self._context) if m.get("role") == "user"), None
+            (m for m in reversed(context) if m.get("role") == "user"), None
         )
-        if last_user:
-            content = last_user.get("content", "")
-            if isinstance(content, list):
-                text = " ".join(c.get("text", "") for c in content if c.get("type") == "text")
-            else:
-                text = str(content)
-            logger.debug(
-                "📤 Round %d | 指令: %s | 上下文: %d 条消息",
-                round_num, text[:100], len(self._context),
-            )
+        if not last_user:
+            return
+        content = last_user.get("content", "")
+        if isinstance(content, list):
+            text = "\n".join(c.get("text", "") for c in content if c.get("type") == "text")
+            has_image = any(c.get("type") == "image_url" for c in content)
+        else:
+            text = str(content)
+            has_image = False
+        image_tag = " [+截图]" if has_image else ""
+        logger.debug(
+            "──── 📤 Round %d | 上下文 %d 条消息%s ────\n%s",
+            round_num, len(context), image_tag, text,
+        )
 
     @staticmethod
     def _log_response(round_num: int, action: UnifiedAction, output):
-        thinking = output.thinking[:200] + "..." if len(output.thinking) > 200 else output.thinking
         logger.debug(
-            "📥 Round %d | 思考: %s | 动作: %s (%s, %s)",
-            round_num, thinking, action.type.value, action.x, action.y,
+            "──── 📥 Round %d | 动作: %s (%s, %s) ────\n%s",
+            round_num, action.type.value, action.x, action.y, output.thinking,
         )

@@ -1,8 +1,17 @@
 # AutoQA
 
-基于 VLM 的移动端自动化测试框架。
+基于 VLM 的移动端自动化测试框架，用自然语言描述测试用例，自动在真机上执行操作并验证结果。
 
-采用双模型架构：**操作模型**（如 AutoGLM）负责手机操作（点击、滑动、输入），**VLM**（视觉语言模型）负责截图断言，实现"操作"与"验证"的分离。内置 **Action 缓存**机制，对重复操作自动跳过 API 调用，降低延迟和成本。
+## feature
+**自然语言驱动的测试描述** — 支持用自然语言描述测试场景，LLM 自动分解为操作步骤和断言，生成可执行的 YAML 测试用例；也支持交互式模式实时输入、规划、确认、执行。
+
+**多模型协作架构** — 操作模型（AutoGLM）负责手机操作，VLM（Gemini）负责截图断言和页面理解，LLM 负责自然语言到测试步骤的规划，三个模型各司其职，通过统一 Provider 层（`ModelProvider` Protocol + 工厂函数）实现模型可插拔切换。
+
+**跨页面上下文传递** — 采用步骤级上下文隔离避免历史信息干扰，同时通过独立的 PageDescriber 模块（VLM）在每步执行前分析截图提取关键信息（任务要求、数字条件等），跨步骤传递给下一步，解决页面跳转后操作模型丢失前页语义的问题。
+
+**Action 语义缓存** — Planner 阶段由 LLM 生成归一化 cache_key（如 `tap:comment_button`），Execution 阶段通过三层查找实现缓存命中：App 包名精确过滤 → 本地 sentence-transformers embedding 语义匹配（<5ms）→ pHash 视觉验证防 UI 变更误命中，重复操作跳过 API 调用，单次命中节省 2-3 秒延迟。
+
+
 
 ## 环境准备
 
@@ -300,6 +309,7 @@ python main.py interactive [--device-type adb] [--device-id ID] [-v]
 ├── planner/             # YAML 解析 + LLM 规划器
 ├── executor/            # 操作执行器 + 模型适配层
 ├── asserter/            # VLM 视觉断言
+├── describer/           # VLM 页面描述器（跨步骤上下文传递）
 ├── device/              # 设备抽象层（ADB）
 ├── cache/               # Action 缓存（embedding 语义匹配 + pHash 视觉验证）
 ├── screenshot/          # 截图管理
