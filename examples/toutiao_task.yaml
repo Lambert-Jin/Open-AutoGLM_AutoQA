@@ -21,10 +21,11 @@ tasks:
     cache_key: tap:me_tab
   - action: 点击'创作中心'
     cache_key: tap:creator_center
-  - action: 找到"发日常微头条笔记"，点击'去完成'按钮
+  - action: 找到"发优质观点微头条"任务，点击'去完成'按钮
     cache_key: tap:go_to_complete_button
   - action: 按照任务要求完成任务并发布
     cache_key: tap:complete_task
+  - action: 关闭出现的弹窗
   - action: 下滑找到刚刚完成的任务
     cache_key: scoll:task
   - assert: 检查刚刚完成的任务右边按钮显示为'审核中'

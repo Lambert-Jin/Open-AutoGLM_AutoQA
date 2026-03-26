@@ -30,17 +30,17 @@ class ActionOptimizer:
             model=config.model,
             base_url=config.base_url,
             temperature=0.1,
-            max_tokens=500,
+            max_tokens=2000,
         )
         self._history: list[StepRecord] = []
         self._step_counter: int = 0
 
-    def optimize(self, instruction: str) -> str:
-        """根据累积的历史上下文，改写当前指令。无历史时原样返回。"""
+    def optimize(self, instruction: str, current_page_description: str = "") -> str:
+        """根据累积的历史上下文 + 当前页面描述，改写当前指令。无历史时原样返回。"""
         if not self._history:
             return instruction
 
-        user_prompt = self._build_prompt(instruction)
+        user_prompt = self._build_prompt(instruction, current_page_description)
         logger.debug("──── 🔧 指令优化器输入 ────\n%s", user_prompt)
         try:
             result = self.provider.chat(
@@ -71,7 +71,7 @@ class ActionOptimizer:
         self._step_counter = 0
         logger.debug("ActionOptimizer 已重置")
 
-    def _build_prompt(self, current_instruction: str) -> str:
+    def _build_prompt(self, current_instruction: str, current_page_description: str = "") -> str:
         """构建带 XML 标签的用户消息"""
         parts = ["<已执行步骤>"]
         for record in self._history:
@@ -82,6 +82,9 @@ class ActionOptimizer:
             parts.append(f"</步骤{record.step_num}>")
         parts.append("</已执行步骤>")
         parts.append("")
+        if current_page_description:
+            parts.append(f"<当前页面描述>{current_page_description}</当前页面描述>")
+            parts.append("")
         parts.append(f"<当前指令>{current_instruction}</当前指令>")
         parts.append("")
         parts.append("请改写当前指令，使其更加具体明确：")

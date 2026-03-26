@@ -94,9 +94,9 @@ class TestExecutor:
             except Exception as e:
                 logger.warning("页面描述失败: %s", e)
 
-        # ── 指令优化（根据累积历史改写当前指令）──
+        # ── 指令优化（根据累积历史 + 当前页面描述改写当前指令）──
         if self.action_optimizer:
-            description = self.action_optimizer.optimize(description)
+            description = self.action_optimizer.optimize(description, current_page_description)
 
         # ── 缓存快速路径 ──
         if cache_key and self.action_cache:
