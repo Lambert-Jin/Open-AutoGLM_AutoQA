@@ -15,6 +15,7 @@ from executor.model_protocol import ActionModel
 
 if TYPE_CHECKING:
     from describer import PageDescriber
+    from optimizer import ActionOptimizer
 
 logger = logging.getLogger(__name__)
 
@@ -32,11 +33,12 @@ class TestExecutor:
     """
     测试执行器。
 
-    上下文策略：步骤级隔离 + VLM 页面描述跨步骤传递
+    上下文策略：步骤级隔离 + ActionOptimizer 跨步骤指令优化
     - 每个 execute_action() 调用独立维护上下文（system prompt + 当前步骤对话）
     - 步骤间不共享完整历史，避免前序步骤的残留信息误导模型
-    - 通过 PageDescriber（VLM）分析每步截图，将页面关键信息传递给下一步
-    - 解决跨页面语义丢失问题（如"完成任务"需要知道前一页看到的任务内容）
+    - 通过 PageDescriber（VLM）分析每步截图提取页面关键信息
+    - 通过 ActionOptimizer（LLM）根据累积的历史步骤改写当前指令，使其更具体
+    - AutoGLM 收到优化后的指令 + 当前截图
     """
 
     MAX_ROUNDS_PER_STEP = 15  # 单步骤内最多对话轮次
@@ -45,10 +47,11 @@ class TestExecutor:
         self,
         model: ActionModel,
         device: Device,
-        max_steps_per_action: int = 10,
+        max_steps_per_action: int = 20,
         action_cache: ActionCache | None = None,
         post_action_delay: float = 1.0,
         page_describer: PageDescriber | None = None,
+        action_optimizer: ActionOptimizer | None = None,
     ):
         self.model = model
         self.device = device
@@ -58,8 +61,8 @@ class TestExecutor:
         self.action_cache = action_cache
         self.post_action_delay = post_action_delay  # 动作执行后等待页面加载的延迟（秒）
         self.page_describer = page_describer
+        self.action_optimizer = action_optimizer
         self._system_prompt: str = ""  # 缓存 system prompt，避免重复获取
-        self._last_page_description: str = ""  # 上一步的页面描述，传递给下一步
 
     def execute_action(self, description: str, cache_key: str = "") -> ExecutorActionResult:
         """
@@ -83,8 +86,7 @@ class TestExecutor:
         screenshot = self.device.screenshot()
         current_app = self.device.current_app()
 
-        # ── 页面描述（跨步骤传递）──
-        # 无论缓存是否命中都要 describe，因为下一步可能需要这一步的页面信息
+        # ── 页面描述（记录当前页面信息供后续步骤使用）──
         current_page_description = ""
         if self.page_describer:
             try:
@@ -92,9 +94,9 @@ class TestExecutor:
             except Exception as e:
                 logger.warning("页面描述失败: %s", e)
 
-        # 将【上一步】的页面描述附加到当前步骤的 description
-        if self._last_page_description:
-            description = f"{description}\n\n<上一个页面的内容>\n{self._last_page_description}\n</上一个页面的内容>"
+        # ── 指令优化（根据累积历史改写当前指令）──
+        if self.action_optimizer:
+            description = self.action_optimizer.optimize(description)
 
         # ── 缓存快速路径 ──
         if cache_key and self.action_cache:
@@ -120,7 +122,8 @@ class TestExecutor:
                 cache_result = self.action_executor.execute(cache_action)
                 if cache_result.success:
                     self.action_cache.record_hit(cached.entry)
-                    self._last_page_description = current_page_description
+                    if self.action_optimizer:
+                        self.action_optimizer.record(original_description, current_page_description)
                     return ExecutorActionResult(
                         success=True,
                         actions_taken=[{"type": params["action_type"], "x": params["x"], "y": params["y"]}],
@@ -170,7 +173,8 @@ class TestExecutor:
             # finish → 步骤完成
             if action.is_finish:
                 logger.info("步骤完成: %s (共 %d 轮)", original_description, round_num + 1)
-                self._last_page_description = current_page_description
+                if self.action_optimizer:
+                    self.action_optimizer.record(original_description, current_page_description)
                 exec_result = ExecutorActionResult(
                     success=True, actions_taken=actions_taken,
                     rounds=round_num + 1,
@@ -190,7 +194,8 @@ class TestExecutor:
             })
 
             if result.should_finish:
-                self._last_page_description = current_page_description
+                if self.action_optimizer:
+                    self.action_optimizer.record(original_description, current_page_description)
                 exec_result = ExecutorActionResult(
                     success=result.success, actions_taken=actions_taken,
                     rounds=round_num + 1, error=result.message,
@@ -232,7 +237,8 @@ class TestExecutor:
                 )
             )
 
-        self._last_page_description = current_page_description
+        if self.action_optimizer:
+            self.action_optimizer.record(original_description, current_page_description)
         return ExecutorActionResult(
             success=False, actions_taken=actions_taken,
             rounds=self.max_steps, error="max_steps exceeded",
@@ -253,7 +259,8 @@ class TestExecutor:
     def reset(self):
         """重置状态（切换 TestCase 时调用）"""
         self._system_prompt = ""
-        self._last_page_description = ""
+        if self.action_optimizer:
+            self.action_optimizer.reset()
         logger.debug("Executor 已重置")
 
     def _maybe_cache_action(

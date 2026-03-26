@@ -58,7 +58,7 @@ def _setup_logging(verbose: bool):
         datefmt="%H:%M:%S",
     )
     level = logging.DEBUG if verbose else logging.INFO
-    for module in ("executor", "runner", "asserter", "planner", "screenshot", "config", "device", "cache", "describer"):
+    for module in ("executor", "runner", "asserter", "planner", "screenshot", "config", "device", "cache", "describer", "optimizer"):
         logging.getLogger(module).setLevel(level)
 
 
@@ -109,8 +109,16 @@ def run_test(args):
     from describer import PageDescriber
     page_describer = PageDescriber(vlm_config) if vlm_config else None
 
+    # 初始化 ActionOptimizer（复用 Planner 配置）
+    from optimizer import ActionOptimizer
+    _, _, _, planner_config, _ = load_global_config()
+    action_optimizer = ActionOptimizer(planner_config) if planner_config else None
+
     # 组装
-    executor = TestExecutor(model=action_model, device=device, action_cache=action_cache, page_describer=page_describer)
+    executor = TestExecutor(
+        model=action_model, device=device, action_cache=action_cache,
+        page_describer=page_describer, action_optimizer=action_optimizer,
+    )
     asserter = Asserter(vlm_config)
     screenshot_mgr = ScreenshotManager(device=device)
 
@@ -224,8 +232,15 @@ def interactive_test(args):
     from describer import PageDescriber
     page_describer = PageDescriber(vlm_config) if vlm_config else None
 
+    # 初始化 ActionOptimizer（复用 Planner 配置）
+    from optimizer import ActionOptimizer
+    action_optimizer = ActionOptimizer(planner_config) if planner_config else None
+
     # 组装
-    executor = TestExecutor(model=action_model, device=device, page_describer=page_describer)
+    executor = TestExecutor(
+        model=action_model, device=device,
+        page_describer=page_describer, action_optimizer=action_optimizer,
+    )
     asserter = Asserter(vlm_config)
     screenshot_mgr = ScreenshotManager(device=device)
     runner = TestRunner(executor, asserter, screenshot_mgr)
