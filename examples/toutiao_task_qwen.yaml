@@ -1,6 +1,6 @@
-name: 今日头条评论区测试
+name: 今日头条激励任务测试（Qwen）
 device:
-  type: android
+  type: adb
 config:
   action_model:
     provider: autoglm
@@ -8,20 +8,23 @@ config:
     api_key: ${AUTOGLM_API_KEY}
     model: autoglm-phone
   vlm:
-    provider: gemini
-    api_key: ${GEMINI_API_KEY}
-    model: gemini-3-pro-image-preview
+    provider: qwen
+    base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
+    api_key: ${QWEN_API_KEY}
+    model: qwen3-vl-plus
+  llm:
+    provider: qwen
+    base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
+    api_key: ${QWEN_API_KEY}
+    model: qwen3.5-flash
 tasks:
 - name: 今日头条激励任务完成及状态检查
   flow:
   - action: 打开今日头条App
-    cache_key: launch:toutiao
     timeout: 15
   - action: 点击底部导航栏的'我的'
   - action: 点击'创作中心'
   - action: 找到"带图或话题发文"任务，点击'去完成'按钮
   - action: 按照任务要求完成任务并发布
-    cache_key: tap:complete_task
-  - action: 关闭出现的弹窗
   - action: 下滑找到刚刚完成的任务
   - assert: 检查刚刚完成的任务右边按钮显示为'审核中'

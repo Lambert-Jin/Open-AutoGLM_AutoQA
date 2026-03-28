@@ -187,7 +187,7 @@ class AutoGLMConfig:
     api_key: str = ""
     model: str = "autoglm-phone"
     max_tokens: int = 3000
-    temperature: float = 0.0
+    temperature: float = 0.1
     lang: str = "cn"
     custom_rules: list[str] = field(default_factory=list)
 

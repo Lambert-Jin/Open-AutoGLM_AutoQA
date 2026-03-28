@@ -65,6 +65,18 @@ class ActionOptimizer:
             page_description=page_description,
         ))
 
+    def get_history_text(self) -> str:
+        """格式化历史记录为文本（供 VLM 验证使用）"""
+        if not self._history:
+            return ""
+        parts = []
+        for record in self._history:
+            line = f"步骤{record.step_num}: {record.instruction}"
+            if record.page_description:
+                line += f" → 页面: {record.page_description}"
+            parts.append(line)
+        return "\n".join(parts)
+
     def reset(self):
         """清空历史（切换 TestCase 时调用）"""
         self._history.clear()

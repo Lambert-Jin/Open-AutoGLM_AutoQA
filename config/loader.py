@@ -71,8 +71,10 @@ def load_global_config(
 
     # device
     device_raw = raw.get("device", {})
+    raw_type = device_raw.get("type", "adb")
+    device_type_map = {"android": "adb", "harmony": "hdc", "ios": "ios"}
     device_config = DeviceConfig(
-        device_type=device_raw.get("type", "adb"),
+        device_type=device_type_map.get(raw_type, raw_type),
         device_id=device_raw.get("id"),
     )
 

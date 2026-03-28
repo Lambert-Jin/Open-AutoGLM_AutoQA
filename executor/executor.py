@@ -228,6 +228,31 @@ class TestExecutor:
             current_app = self.device.current_app()
             screen_info = self.model.build_screen_info(current_app)
 
+            # ── VLM 完成度验证（第 2 轮起）──
+            if self.page_describer and round_num >= 1:
+                try:
+                    history_text = self.action_optimizer.get_history_text() if self.action_optimizer else ""
+                    verify = self.page_describer.verify_completion(
+                        before_screenshot=initial_screenshot,
+                        after_screenshot=screenshot,
+                        action_description=description,
+                        history_text=history_text,
+                    )
+                    if verify.completed and verify.confidence >= 0.8:
+                        logger.info("VLM 确认任务完成 (round %d): %s (confidence=%.2f)",
+                                   round_num + 1, verify.reason, verify.confidence)
+                        if self.action_optimizer:
+                            self.action_optimizer.record(original_description, current_page_description)
+                        exec_result = ExecutorActionResult(
+                            success=True, actions_taken=actions_taken, rounds=round_num + 1,
+                        )
+                        self._maybe_cache_action(cache_key, exec_result, actions_taken, current_app, initial_screenshot)
+                        return exec_result
+                    elif verify.completed:
+                        logger.debug("VLM 认为可能完成但 confidence 不足: %.2f", verify.confidence)
+                except Exception as e:
+                    logger.warning("VLM 验证失败，继续正常流程: %s", e)
+
             context.append(
                 self.model.build_user_message(
                     text=f"** Screen Info **\n{screen_info}",
