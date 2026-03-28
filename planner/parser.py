@@ -7,7 +7,7 @@ import re
 
 import yaml
 
-from config.settings import ActionModelConfig, DeviceConfig, VLMConfig
+from config.settings import ActionModelConfig, DeviceConfig, LLMConfig, VLMConfig
 from suite import ActionStep, AssertStep, Step, TestCase, TestSuite
 
 
@@ -33,17 +33,17 @@ def _resolve_dict(data: dict) -> dict:
     return result
 
 
-def parse_yaml(path: str) -> tuple[TestSuite, DeviceConfig, ActionModelConfig, VLMConfig]:
+def parse_yaml(path: str) -> tuple[TestSuite, DeviceConfig, ActionModelConfig, VLMConfig, LLMConfig]:
     """
     解析 YAML 测试用例文件。
 
     优先级：YAML > 全局配置 > 代码默认值
 
     Returns:
-        (TestSuite, DeviceConfig, ActionModelConfig, VLMConfig)
+        (TestSuite, DeviceConfig, ActionModelConfig, VLMConfig, LLMConfig)
     """
     from config.loader import load_global_config
-    global_device, global_model, global_vlm, _, _ = load_global_config()
+    global_device, global_model, global_vlm, global_llm, _ = load_global_config()
 
     with open(path, "r", encoding="utf-8") as f:
         raw = yaml.safe_load(f)
@@ -84,11 +84,22 @@ def parse_yaml(path: str) -> tuple[TestSuite, DeviceConfig, ActionModelConfig, V
         max_tokens=vlm_raw.get("max_tokens", global_vlm.max_tokens),
     )
 
+    # llm: YAML > 全局配置
+    llm_raw = config_raw.get("llm", {})
+    llm_config = LLMConfig(
+        provider=llm_raw.get("provider", global_llm.provider),
+        base_url=llm_raw.get("base_url", global_llm.base_url),
+        api_key=llm_raw.get("api_key", global_llm.api_key),
+        model=llm_raw.get("model", global_llm.model),
+        temperature=llm_raw.get("temperature", global_llm.temperature),
+        max_tokens=llm_raw.get("max_tokens", global_llm.max_tokens),
+    )
+
     # tasks
     test_cases = [_parse_test_case(t) for t in raw.get("tasks", [])]
     suite = TestSuite(name=raw.get("name", os.path.basename(path)), test_cases=test_cases)
 
-    return suite, device_config, model_config, vlm_config
+    return suite, device_config, model_config, vlm_config, llm_config
 
 
 def _parse_test_case(raw: dict) -> TestCase:

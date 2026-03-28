@@ -75,8 +75,8 @@ def run_test(args):
     from screenshot import ScreenshotManager
     from config.loader import load_global_config
 
-    # 解析 YAML
-    suite, device_config, model_config, vlm_config = parse_yaml(args.yaml_path)
+    # 解析 YAML（包含 action_model / vlm / llm 三类模型配置）
+    suite, device_config, model_config, vlm_config, llm_config = parse_yaml(args.yaml_path)
 
     # 加载全局配置（用于 cache 等）
     _, _, _, _, cache_config = load_global_config()
@@ -109,10 +109,9 @@ def run_test(args):
     from describer import PageDescriber
     page_describer = PageDescriber(vlm_config) if vlm_config else None
 
-    # 初始化 ActionOptimizer（复用 Planner 配置）
+    # 初始化 ActionOptimizer（复用 LLM 配置）
     from optimizer import ActionOptimizer
-    _, _, _, planner_config, _ = load_global_config()
-    action_optimizer = ActionOptimizer(planner_config) if planner_config else None
+    action_optimizer = ActionOptimizer(llm_config) if llm_config else None
 
     # 组装
     executor = TestExecutor(
@@ -152,12 +151,12 @@ def generate_test(args):
     from config.loader import load_global_config
     from planner import plan_test_case, generate_yaml_content, append_to_yaml
 
-    _, _, _, planner_config, _ = load_global_config()
+    _, _, _, llm_config, _ = load_global_config()
 
     print(f"\n规划中: {args.description}\n")
 
     try:
-        test_case = plan_test_case(args.description, planner_config)
+        test_case = plan_test_case(args.description, llm_config)
     except ValueError as e:
         print(f"规划失败: {e}", file=sys.stderr)
         sys.exit(1)
@@ -210,7 +209,7 @@ def interactive_test(args):
     from suite import TestSuite
 
     # 使用全局配置（替代硬编码默认值）
-    device_config, model_config, vlm_config, planner_config, _ = load_global_config()
+    device_config, model_config, vlm_config, llm_config, _ = load_global_config()
 
     # 创建设备实例（CLI 参数 > 全局配置）
     device_type_str = args.device_type or device_config.device_type
@@ -232,9 +231,9 @@ def interactive_test(args):
     from describer import PageDescriber
     page_describer = PageDescriber(vlm_config) if vlm_config else None
 
-    # 初始化 ActionOptimizer（复用 Planner 配置）
+    # 初始化 ActionOptimizer（复用 LLM 配置）
     from optimizer import ActionOptimizer
-    action_optimizer = ActionOptimizer(planner_config) if planner_config else None
+    action_optimizer = ActionOptimizer(llm_config) if llm_config else None
 
     # 组装
     executor = TestExecutor(
@@ -269,7 +268,7 @@ def interactive_test(args):
         # 规划
         print(f"\n规划中...\n")
         try:
-            test_case = plan_test_case(description, planner_config)
+            test_case = plan_test_case(description, llm_config)
         except ValueError as e:
             print(f"规划失败: {e}")
             continue

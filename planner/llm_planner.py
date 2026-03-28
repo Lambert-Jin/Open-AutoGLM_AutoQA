@@ -8,25 +8,25 @@ import re
 
 import yaml
 
-from config.settings import PlannerConfig
+from config.settings import LLMConfig
 from planner.prompts import PLANNER_SYSTEM_PROMPT
 from suite import ActionStep, AssertStep, Step, TestCase, TestSuite
 
 logger = logging.getLogger(__name__)
 
 
-def plan_test_case(description: str, planner_config: PlannerConfig) -> TestCase:
+def plan_test_case(description: str, llm_config: LLMConfig) -> TestCase:
     """
     将自然语言描述转换为 TestCase。
 
     Args:
         description: 自然语言测试描述
-        planner_config: 规划器 LLM 配置
+        llm_config: LLM 配置
 
     Returns:
         解析后的 TestCase
     """
-    response = _call_llm(PLANNER_SYSTEM_PROMPT, description, planner_config)
+    response = _call_llm(PLANNER_SYSTEM_PROMPT, description, llm_config)
     return _parse_plan_response(response)
 
 
@@ -109,7 +109,7 @@ def _test_case_to_dict(case: TestCase) -> dict:
     return {"name": case.name, "flow": flow}
 
 
-def _call_llm(system_prompt: str, user_prompt: str, config: PlannerConfig) -> str:
+def _call_llm(system_prompt: str, user_prompt: str, config: LLMConfig) -> str:
     """通过统一 Provider 层调用 LLM"""
     from providers import create_provider
 

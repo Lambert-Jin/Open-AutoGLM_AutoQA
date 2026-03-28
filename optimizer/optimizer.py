@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass
 
-from config.settings import PlannerConfig
+from config.settings import LLMConfig
 from optimizer.prompts import OPTIMIZER_SYSTEM_PROMPT
 from providers import create_provider
 
@@ -23,14 +23,14 @@ class StepRecord:
 class ActionOptimizer:
     """根据累积的历史步骤（指令 + 页面描述），用 LLM 改写当前操作指令。"""
 
-    def __init__(self, config: PlannerConfig):
+    def __init__(self, config: LLMConfig):
         self.provider = create_provider(
             provider=config.provider,
             api_key=config.api_key,
             model=config.model,
             base_url=config.base_url,
             temperature=0.1,
-            max_tokens=500,
+            max_tokens=3000,
         )
         self._history: list[StepRecord] = []
         self._step_counter: int = 0
