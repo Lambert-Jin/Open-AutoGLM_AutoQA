@@ -11,6 +11,8 @@
 
 **Action 语义缓存** — Planner 阶段由 LLM 生成归一化 cache_key（如 `tap:comment_button`），Execution 阶段通过三层查找实现缓存命中：App 包名精确过滤 → 本地 sentence-transformers embedding 语义匹配（<5ms）→ pHash 视觉验证防 UI 变更误命中，重复操作跳过 API 调用，单次命中节省 2-3 秒延迟。
 
+**VLM 完成度验证** — AutoGLM 内循环中，每轮动作执行后用 VLM 对比操作前后截图 + 历史上下文，判断任务是否已完成。确认完成（confidence ≥ 0.8）时提前退出，避免 AutoGLM 重复执行或延迟输出 finish，单次可节省 1-3 轮 AutoGLM 调用（5-15s/轮）。
+
 
 
 ## 环境准备
@@ -309,7 +311,7 @@ python main.py interactive [--device-type adb] [--device-id ID] [-v]
 ├── planner/             # YAML 解析 + LLM 规划器
 ├── executor/            # 操作执行器 + 模型适配层
 ├── asserter/            # VLM 视觉断言
-├── describer/           # VLM 页面描述器（截图关键信息提取）
+├── describer/           # VLM 页面描述器（截图关键信息提取 + 完成度验证）
 ├── optimizer/           # LLM 指令优化器（累积历史上下文改写指令）
 ├── device/              # 设备抽象层（ADB）
 ├── cache/               # Action 缓存（embedding 语义匹配 + pHash 视觉验证）

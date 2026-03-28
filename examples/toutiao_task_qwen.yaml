@@ -8,15 +8,13 @@ config:
     api_key: ${AUTOGLM_API_KEY}
     model: autoglm-phone
   vlm:
-    provider: qwen
-    base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
-    api_key: ${QWEN_API_KEY}
-    model: qwen3-vl-plus
+    provider: gemini
+    api_key: ${GEMINI_API_KEY}
+    model: gemini-3-pro-image-preview
   llm:
-    provider: qwen
-    base_url: https://dashscope.aliyuncs.com/compatible-mode/v1
-    api_key: ${QWEN_API_KEY}
-    model: qwen3.5-flash
+    provider: gemini
+    api_key: ${GEMINI_API_KEY}
+    model: gemini-3-pro-image-preview
 tasks:
 - name: 今日头条激励任务完成及状态检查
   flow:

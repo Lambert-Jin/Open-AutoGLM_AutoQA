@@ -21,7 +21,6 @@ tasks:
   - action: 点击'创作中心'
   - action: 找到"带图或话题发文"任务，点击'去完成'按钮
   - action: 按照任务要求完成任务并发布
-    cache_key: tap:complete_task
   - action: 关闭出现的弹窗
   - action: 下滑找到刚刚完成的任务
   - assert: 检查刚刚完成的任务右边按钮显示为'审核中'
