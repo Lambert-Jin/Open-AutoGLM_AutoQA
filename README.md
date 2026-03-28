@@ -104,13 +104,13 @@ adb install AdbKeyboard.apk
 
 ## 模型配置
 
-AutoQA 使用三个独立的模型组件，可分别配置不同的模型：
+AutoQA 使用三类模型，每类只需配置一次：
 
-| 组件 | 用途 | 支持的 Provider |
-|---|---|---|
-| **action_model** | 手机操作（点击、滑动、输入） | `autoglm` |
-| **vlm** | 截图断言（判断期望是否成立） | `gemini`、`qwen`、`openai` |
-| **planner** | 自然语言 → 测试步骤规划 | `gemini`、`qwen`、`openai` |
+| 配置项 | 用途 | 使用组件 | 支持的 Provider |
+|---|---|---|---|
+| **action_model** | 手机操作（点击、滑动、输入） | Executor | `autoglm` |
+| **vlm** | 截图理解 + 视觉断言 | PageDescriber、Asserter | `gemini`、`qwen`、`openai` |
+| **llm** | 指令优化 + 测试步骤规划 | ActionOptimizer、Planner | `gemini`、`qwen`、`openai` |
 
 ### 全局配置（config.yaml）
 
@@ -129,7 +129,7 @@ config:
     api_key: "${GEMINI_API_KEY}"
     model: "gemini-2.5-flash"
 
-  planner:
+  llm:
     provider: "gemini"
     api_key: "${GEMINI_API_KEY}"
     model: "gemini-2.5-flash"
@@ -174,10 +174,10 @@ vlm:
   model: "qwen-vl-max"
 ```
 
-**Planner 从 Gemini 切换到 OpenAI：**
+**LLM（规划 + 优化）从 Gemini 切换到 OpenAI：**
 
 ```yaml
-planner:
+llm:
   provider: "openai"
   base_url: "https://api.openai.com/v1"
   api_key: "${OPENAI_API_KEY}"

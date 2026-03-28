@@ -56,8 +56,8 @@ class ActionModelConfig:
 
 
 @dataclass
-class PlannerConfig:
-    """规划器 LLM 配置（自然语言 → 测试步骤）"""
+class LLMConfig:
+    """LLM 配置（Planner 规划 + Optimizer 指令优化共用）"""
     provider: str = "gemini"
     base_url: str = ""              # Qwen 等 OpenAI 兼容 API 需要
     api_key: str = "${GEMINI_API_KEY}"

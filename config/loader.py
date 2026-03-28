@@ -13,7 +13,7 @@ from config.settings import (
     ActionModelConfig,
     CacheConfig,
     DeviceConfig,
-    PlannerConfig,
+    LLMConfig,
     VLMConfig,
 )
 
@@ -46,7 +46,7 @@ def _resolve_dict(data: dict) -> dict:
 
 def load_global_config(
     config_path: str | Path | None = None,
-) -> tuple[DeviceConfig, ActionModelConfig, VLMConfig, PlannerConfig, CacheConfig]:
+) -> tuple[DeviceConfig, ActionModelConfig, VLMConfig, LLMConfig, CacheConfig]:
     """
     加载全局配置文件。
 
@@ -54,13 +54,13 @@ def load_global_config(
     文件不存在时返回代码默认值。
 
     Returns:
-        (DeviceConfig, ActionModelConfig, VLMConfig, PlannerConfig, CacheConfig)
+        (DeviceConfig, ActionModelConfig, VLMConfig, LLMConfig, CacheConfig)
     """
     path = Path(config_path) if config_path else _CONFIG_PATH
 
     if not path.exists():
         logger.debug("全局配置文件不存在: %s，使用代码默认值", path)
-        return DeviceConfig(), ActionModelConfig(), VLMConfig(), PlannerConfig(), CacheConfig()
+        return DeviceConfig(), ActionModelConfig(), VLMConfig(), LLMConfig(), CacheConfig()
 
     logger.info("加载全局配置: %s", path)
 
@@ -102,15 +102,15 @@ def load_global_config(
         max_tokens=vm.get("max_tokens", 1000),
     )
 
-    # planner
-    pl = config_raw.get("planner", {})
-    planner_config = PlannerConfig(
-        provider=pl.get("provider", "gemini"),
-        base_url=pl.get("base_url", ""),
-        api_key=pl.get("api_key", "${GEMINI_API_KEY}"),
-        model=pl.get("model", "gemini-3.1-pro-preview"),
-        temperature=pl.get("temperature", 0.3),
-        max_tokens=pl.get("max_tokens", 2000),
+    # llm（Planner + Optimizer 共用）
+    lm = config_raw.get("llm", {})
+    llm_config = LLMConfig(
+        provider=lm.get("provider", "gemini"),
+        base_url=lm.get("base_url", ""),
+        api_key=lm.get("api_key", "${GEMINI_API_KEY}"),
+        model=lm.get("model", "gemini-3.1-pro-preview"),
+        temperature=lm.get("temperature", 0.3),
+        max_tokens=lm.get("max_tokens", 2000),
     )
 
     # cache
@@ -123,4 +123,4 @@ def load_global_config(
         db_path=ca.get("db_path", ".cache/action_cache.db"),
     )
 
-    return device_config, action_model_config, vlm_config, planner_config, cache_config
+    return device_config, action_model_config, vlm_config, llm_config, cache_config
