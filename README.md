@@ -7,7 +7,7 @@
 
 **多模型协作架构** — 操作模型（AutoGLM）负责手机操作，VLM（Gemini）负责截图断言和页面理解，LLM 负责自然语言到测试步骤的规划，三个模型各司其职，通过统一 Provider 层（`ModelProvider` Protocol + 工厂函数）实现模型可插拔切换。
 
-**跨页面上下文传递** — 采用步骤级上下文隔离避免历史信息干扰，通过 PageDescriber（VLM）在每步执行前分析截图提取关键信息，再由 ActionOptimizer（LLM）根据累积的全部历史步骤（指令 + 页面描述）智能改写当前操作指令，将模糊指令（如"按照任务要求完成"）补充为具体指令（如"发一条30字以上的微头条"），解决跨页面语义丢失问题。
+**跨页面上下文传递** — 采用步骤级上下文隔离避免历史信息干扰，通过 PageDescriber（VLM）分析截图提取关键信息，再由 ActionOptimizer（LLM）根据累积的全部历史步骤（指令 + 页面描述）智能改写当前操作指令，将模糊指令（如"按照任务要求完成"）补充为具体指令（如"发一条30字以上的微头条"），解决跨页面语义丢失问题。上下文处理（describe → record → optimize）通过 ContextAgent 后台异步执行，与 AutoGLM 操作并行，每步节省 ~3.5s 延迟。
 
 **Action 语义缓存** — Planner 阶段由 LLM 生成归一化 cache_key（如 `tap:comment_button`），Execution 阶段通过三层查找实现缓存命中：App 包名精确过滤 → 本地 sentence-transformers embedding 语义匹配（<5ms）→ pHash 视觉验证防 UI 变更误命中，重复操作跳过 API 调用，单次命中节省 2-3 秒延迟。
 
@@ -307,7 +307,7 @@ python main.py interactive [--device-type adb] [--device-id ID] [-v]
 ├── config/              # 配置数据类 + 配置加载器
 ├── providers/           # 统一模型 Provider 层（Gemini / OpenAI 兼容）
 ├── planner/             # YAML 解析 + LLM 规划器
-├── executor/            # 操作执行器 + 模型适配层
+├── executor/            # 操作执行器 + 模型适配层 + ContextAgent 异步子代理
 ├── asserter/            # VLM 视觉断言
 ├── describer/           # VLM 页面描述器（截图关键信息提取）
 ├── optimizer/           # LLM 指令优化器（累积历史上下文改写指令）

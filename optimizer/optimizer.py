@@ -41,7 +41,7 @@ class ActionOptimizer:
             return instruction
 
         user_prompt = self._build_prompt(instruction)
-        logger.debug("──── 🔧 指令优化器输入 ────\n%s", user_prompt)
+        # logger.debug("──── 🔧 指令优化器输入 ────\n%s", user_prompt)
         try:
             result = self.provider.chat(
                 [{"role": "user", "content": user_prompt}],

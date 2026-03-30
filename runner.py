@@ -65,7 +65,11 @@ class TestRunner:
 
         for i, step in enumerate(case.steps, 1):
             if isinstance(step, ActionStep):
-                result = self._run_action(step, i)
+                next_action = self._peek_next_action(case.steps, i)
+                result = self._run_action(
+                    step, i,
+                    next_instruction=next_action.description if next_action else None,
+                )
             elif isinstance(step, AssertStep):
                 result = self._run_assert(step, i)
             else:
@@ -80,7 +84,7 @@ class TestRunner:
         status = "passed" if all(r.success for r in step_results) else "failed"
         return TestCaseResult(case_name=case.name, steps=step_results, status=status)
 
-    def _run_action(self, step: ActionStep, step_num: int) -> StepResult:
+    def _run_action(self, step: ActionStep, step_num: int, next_instruction: str | None = None) -> StepResult:
         """执行操作步骤"""
         timing = Timing.start_now()
 
@@ -88,6 +92,7 @@ class TestRunner:
 
         result: ExecutorActionResult = self.executor.execute_action(
             step.description, cache_key=step.cache_key,
+            next_instruction=next_instruction,
         )
 
         timing.stop()
@@ -143,6 +148,14 @@ class TestRunner:
             timing=timing,
             detail=result,
         )
+
+    @staticmethod
+    def _peek_next_action(steps: list, current_index: int) -> ActionStep | None:
+        """向前查找下一个 ActionStep（current_index 从 1 开始）"""
+        for step in steps[current_index:]:
+            if isinstance(step, ActionStep):
+                return step
+        return None
 
     def _cleanup_device(self):
         """用例间清理：回桌面 + 关闭所有后台 App"""

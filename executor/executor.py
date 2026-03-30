@@ -11,6 +11,7 @@ from device import Device
 from device.errors import ScreenshotSensitiveError
 from executor.actions import ActionType, UnifiedAction
 from executor.action_executor import ActionExecutor, ActionExecuteResult as _AER
+from executor.context_agent import ContextAgent
 from executor.model_protocol import ActionModel
 
 if TYPE_CHECKING:
@@ -64,12 +65,25 @@ class TestExecutor:
         self.action_optimizer = action_optimizer
         self._system_prompt: str = ""  # 缓存 system prompt，避免重复获取
 
-    def execute_action(self, description: str, cache_key: str = "") -> ExecutorActionResult:
+        # 异步上下文子代理：describe + record + precompute optimize 在后台并行
+        self._context_agent: ContextAgent | None = None
+        if self.page_describer or self.action_optimizer:
+            self._context_agent = ContextAgent(self.page_describer, self.action_optimizer)
+
+    def execute_action(
+        self,
+        description: str,
+        cache_key: str = "",
+        next_instruction: str | None = None,
+    ) -> ExecutorActionResult:
         """
         执行一个语义级操作步骤。
 
         内部多轮循环直到模型返回 finish 或达到 max_steps。
         每次调用创建独立上下文，步骤间互不干扰。
+
+        Args:
+            next_instruction: 下一步指令，用于 ContextAgent 预计算优化
         """
         actions_taken: list[dict] = []
         verbose = logger.isEnabledFor(logging.DEBUG)
@@ -82,21 +96,24 @@ class TestExecutor:
             {"role": "system", "content": self._system_prompt},
         ]
 
+        # ── 取预计算结果（上一步 ContextAgent 预计算的优化指令）──
+        precomputed = None
+        if self._context_agent:
+            precomputed = self._context_agent.take_precomputed()
+
         # 截图 + 构造消息
         screenshot = self.device.screenshot()
         current_app = self.device.current_app()
 
-        # ── 页面描述（记录当前页面信息供后续步骤使用）──
-        current_page_description = ""
-        if self.page_describer:
-            try:
-                current_page_description = self.page_describer.describe(screenshot)
-            except Exception as e:
-                logger.warning("页面描述失败: %s", e)
-
-        # ── 指令优化（根据累积历史改写当前指令）──
+        # ── 指令优化：优先用预计算结果，否则同步降级 ──
         if self.action_optimizer:
-            description = self.action_optimizer.optimize(description)
+            if precomputed is not None:
+                description = precomputed
+                logger.info("指令优化: 使用预计算结果")
+            else:
+                description = self.action_optimizer.optimize(description)
+                if self._context_agent:
+                    logger.info("指令优化: 同步降级（无预计算）")
 
         # ── 缓存快速路径 ──
         if cache_key and self.action_cache:
@@ -122,8 +139,8 @@ class TestExecutor:
                 cache_result = self.action_executor.execute(cache_action)
                 if cache_result.success:
                     self.action_cache.record_hit(cached.entry)
-                    if self.action_optimizer:
-                        self.action_optimizer.record(original_description, current_page_description)
+                    if self._context_agent:
+                        self._context_agent.submit(screenshot, original_description, next_instruction)
                     return ExecutorActionResult(
                         success=True,
                         actions_taken=[{"type": params["action_type"], "x": params["x"], "y": params["y"]}],
@@ -134,6 +151,11 @@ class TestExecutor:
                 logger.info("缓存未命中: %s (app=%s, activity=%s)", cache_key, current_app, activity)
         initial_screenshot = screenshot  # 缓存写回用
         screen_info = self.model.build_screen_info(current_app)
+
+        # ── 提交给 ContextAgent（AutoGLM 之前！与 AutoGLM 并行执行）──
+        if self._context_agent:
+            self._context_agent.submit(screenshot, original_description, next_instruction)
+            logger.info("ContextAgent: 已提交，开始与 AutoGLM 并行")
 
         context.append(
             self.model.build_user_message(
@@ -173,8 +195,6 @@ class TestExecutor:
             # finish → 步骤完成
             if action.is_finish:
                 logger.info("步骤完成: %s (共 %d 轮)", original_description, round_num + 1)
-                if self.action_optimizer:
-                    self.action_optimizer.record(original_description, current_page_description)
                 exec_result = ExecutorActionResult(
                     success=True, actions_taken=actions_taken,
                     rounds=round_num + 1,
@@ -194,8 +214,6 @@ class TestExecutor:
             })
 
             if result.should_finish:
-                if self.action_optimizer:
-                    self.action_optimizer.record(original_description, current_page_description)
                 exec_result = ExecutorActionResult(
                     success=result.success, actions_taken=actions_taken,
                     rounds=round_num + 1, error=result.message,
@@ -237,8 +255,6 @@ class TestExecutor:
                 )
             )
 
-        if self.action_optimizer:
-            self.action_optimizer.record(original_description, current_page_description)
         return ExecutorActionResult(
             success=False, actions_taken=actions_taken,
             rounds=self.max_steps, error="max_steps exceeded",
@@ -258,6 +274,8 @@ class TestExecutor:
 
     def reset(self):
         """重置状态（切换 TestCase 时调用）"""
+        if self._context_agent:
+            self._context_agent.reset()
         self._system_prompt = ""
         if self.action_optimizer:
             self.action_optimizer.reset()
