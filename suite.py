@@ -14,6 +14,7 @@ class ActionStep:
     """操作步骤"""
     description: str
     timeout: int = 30
+    cache_key: str = ""  # 归一化缓存键，由 planner 生成或 YAML 手写
 
 
 @dataclass

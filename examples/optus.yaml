@@ -1,0 +1,23 @@
+name: Optus App 登录流程测试
+device:
+  type: android
+config:
+  action_model:
+    provider: autoglm
+    base_url: ${AUTOGLM_BASE_URL}
+    api_key: ${AUTOGLM_API_KEY}
+    model: autoglm-phone
+  vlm:
+    provider: gemini
+    api_key: ${GEMINI_API_KEY}
+    model: gemini-2.5-flash
+tasks:
+- name: Optus App 登录流程测试
+  flow:
+  - action: 打开桌面的 optus 软件
+    timeout: 15
+  - assert: 页面显示一个黄色的按钮，上面写着 log in
+  - action: 点击黄色的 log in 按钮
+  - assert: 弹窗或页面上显示文字 continue with
+    retryOnFail: true
+    retryCleanup: 关闭当前弹窗或广告

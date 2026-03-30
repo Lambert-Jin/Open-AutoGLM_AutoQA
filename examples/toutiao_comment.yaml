@@ -1,38 +1,37 @@
-# 今日头条评论区红包横幅测试
 name: 今日头条评论区红包横幅测试
-
 device:
   type: android
-  # id: "emulator-5554"   # 可选，不指定则自动检测
-
 config:
-  autoglm:
-    base_url: "${AUTOGLM_BASE_URL}"
-    api_key: "${AUTOGLM_API_KEY}"
-    model: "autoglm-phone"
+  action_model:
+    provider: autoglm
+    base_url: ${AUTOGLM_BASE_URL}
+    api_key: ${AUTOGLM_API_KEY}
+    model: autoglm-phone
   vlm:
-    provider: "gemini"
-    api_key: "${GEMINI_API_KEY}"
-    model: "gemini-2.5-flash"
-
+    provider: gemini
+    api_key: ${GEMINI_API_KEY}
+    model: gemini-2.5-flash
 tasks:
-  - name: 评论区红包横幅验证
-    flow:
-      - action: "打开今日头条 App"
-        timeout: 15
-
-      - action: "点击推荐页面中的第一篇文章"
-
-      - action: "点击评论图标进入评论区"
-
-      - assert: "评论区顶部出现了一个红色横幅"
-        severity: critical
-#        retryOnFail: true
-#        retryCleanup: "关闭弹窗或广告"
-  - name: 用例2-搜索功能
-    flow:
-      - action: "打开今日头条 App"
-        timeout: 15
-      - action: "点击搜索框"
-      - action: "输入关键词'科技'"
-      - assert: "页面显示搜索结果列表"
+- name: 头条App评论文章并检查弹窗
+  flow:
+  - action: 打开头条 App
+    cache_key: launch:toutiao
+    timeout: 15
+  - action: 点击一篇非视频文章
+    cache_key: tap:non_video_article
+  - action: 点击评论按钮
+    cache_key: tap:comment_button
+  - action: 输入15字评论并点击发送
+    cache_key: type:comment_text
+  - assert: 页面显示了弹窗
+- name: 查看文章评论区发布入口
+  flow:
+  - action: 打开头条 App
+    cache_key: launch:toutiao
+    timeout: 15
+  - action: 点击一篇非视频文章
+    cache_key: tap:non_video_article
+  - action: 点击评论按钮
+    cache_key: tap:comment_button
+  - assert: 评论区顶部显示灰色横幅
+  - assert: 横幅右侧显示红色'去发布'按钮

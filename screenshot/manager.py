@@ -7,6 +7,7 @@ import logging
 import os
 
 from config.settings import Screenshot
+from device import Device
 
 logger = logging.getLogger(__name__)
 
@@ -14,20 +15,25 @@ logger = logging.getLogger(__name__)
 class ScreenshotManager:
     """截图获取与持久化"""
 
-    def capture(self, device_factory, device_id: str | None = None) -> Screenshot:
+    def __init__(self, device: Device | None = None):
+        self._device = device
+
+    def capture(self, device: Device | None = None) -> Screenshot:
         """从设备截图，返回 Screenshot 对象
 
         Args:
-            device_factory: Open-AutoGLM 的 DeviceFactory 实例
-            device_id: 可选设备 ID
+            device: 可选，覆盖初始化时绑定的设备
         """
-        device_screenshot = device_factory.get_screenshot(device_id)
-        # Open-AutoGLM 返回 Screenshot(base64_data, width, height)
-        logger.debug("截图完成: %dx%d", device_screenshot.width, device_screenshot.height)
+        dev = device or self._device
+        if dev is None:
+            raise RuntimeError("未绑定设备，请在初始化时传入 device 或在 capture() 时传入")
+
+        ds = dev.screenshot()
+        logger.debug("截图完成: %dx%d", ds.width, ds.height)
         return Screenshot(
-            base64=device_screenshot.base64_data,
-            width=device_screenshot.width,
-            height=device_screenshot.height,
+            base64=ds.base64_data,
+            width=ds.width,
+            height=ds.height,
         )
 
     def from_file(self, path: str) -> Screenshot:

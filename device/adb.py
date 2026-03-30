@@ -117,6 +117,20 @@ class ADBDevice:
                         return part.split("/")[0].rstrip("}")
         return "unknown"
 
+    def current_activity(self) -> str:
+        """获取当前 Activity 类名"""
+        result = self._cmd.run(
+            ["shell", "dumpsys", "window", "displays"], timeout=5
+        )
+        for line in result.stdout.splitlines():
+            if "mCurrentFocus" in line or "mFocusedApp" in line:
+                parts = line.split()
+                for part in parts:
+                    if "/" in part and "." in part:
+                        activity = part.split("/")[1].rstrip("}")
+                        return activity.split(".")[-1]  # 只取类名
+        return "unknown"
+
     def launch_app(self, app_name: str) -> None:
         """启动 App，优先 am start，降级到 monkey"""
         package = get_package_name(app_name)
@@ -276,4 +290,15 @@ class ADBDevice:
     # ── 清理 ──
 
     def kill_all_apps(self) -> None:
-        self._cmd.run(["shell", "am", "kill-all"], timeout=5)
+        """强制停止所有第三方 app"""
+        result = self._cmd.run(["shell", "pm", "list", "packages", "-3"], timeout=10)
+        if not result.success:
+            logger.warning("获取第三方包名失败: %s", result.stderr)
+            self._cmd.run(["shell", "am", "kill-all"], timeout=5)
+            return
+
+        for line in result.stdout.splitlines():
+            if not line.startswith("package:"):
+                continue
+            pkg = line[8:]
+            self._cmd.run(["shell", "am", "force-stop", pkg], timeout=5)

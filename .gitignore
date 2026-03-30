@@ -1,6 +1,9 @@
 # 环境变量（含 API Key）
 .env
 
+# Cache database
+.cache/
+
 # Python
 __pycache__/
 *.py[cod]

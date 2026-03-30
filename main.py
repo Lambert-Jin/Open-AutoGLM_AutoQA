@@ -4,21 +4,23 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 import sys
 
 
 def main():
     parser = argparse.ArgumentParser(
         prog="autoqa",
-        description="AutoQA - 基于 AutoGLM + VLM 的移动端自动化测试框架",
+        description="AutoQA - 基于 VLM 的移动端自动化测试框架",
     )
     subparsers = parser.add_subparsers(dest="command")
 
     # run 子命令
     run_parser = subparsers.add_parser("run", help="运行 YAML 测试用例")
     run_parser.add_argument("yaml_path", help="YAML 测试用例文件路径")
-    run_parser.add_argument("--device-type", default=None, help="设备类型: adb | hdc | ios")
+    run_parser.add_argument("--device-type", default=None, help="设备类型: adb")
     run_parser.add_argument("--device-id", default=None, help="设备 ID")
+    run_parser.add_argument("--no-cache", action="store_true", help="禁用 Action 缓存")
     run_parser.add_argument("--verbose", "-v", action="store_true", help="详细日志输出")
 
     # generate 子命令
@@ -30,7 +32,7 @@ def main():
 
     # interactive 子命令
     int_parser = subparsers.add_parser("interactive", help="交互式测试模式")
-    int_parser.add_argument("--device-type", default=None, help="设备类型: adb | hdc | ios")
+    int_parser.add_argument("--device-type", default=None, help="设备类型: adb")
     int_parser.add_argument("--device-id", default=None, help="设备 ID")
     int_parser.add_argument("--verbose", "-v", action="store_true", help="详细日志输出")
 
@@ -56,59 +58,68 @@ def _setup_logging(verbose: bool):
         datefmt="%H:%M:%S",
     )
     level = logging.DEBUG if verbose else logging.INFO
-    for module in ("auto_qa", "executor", "runner", "asserter", "planner", "screenshot", "config"):
+    for module in ("executor", "runner", "asserter", "planner", "screenshot", "config", "device", "cache", "describer", "optimizer"):
         logging.getLogger(module).setLevel(level)
-    logging.getLogger("phone_agent").setLevel(
-        logging.INFO if verbose else logging.WARNING
-    )
 
 
 def run_test(args):
     """模式 1：执行 YAML 测试用例"""
     _setup_logging(args.verbose)
 
-    from phone_agent.device_factory import DeviceType, set_device_type
-    from phone_agent.model.client import ModelConfig
-
+    from device import DeviceType, create_device
+    from executor.models import create_action_model
+    from executor import TestExecutor
     from asserter import Asserter
     from planner import parse_yaml
     from runner import TestRunner
-    from executor import TestExecutor
     from screenshot import ScreenshotManager
+    from config.loader import load_global_config
 
-    # 解析 YAML
-    suite, device_config, autoglm_config, vlm_config = parse_yaml(args.yaml_path)
+    # 解析 YAML（包含 action_model / vlm / llm 三类模型配置）
+    suite, device_config, model_config, vlm_config, llm_config = parse_yaml(args.yaml_path)
+
+    # 加载全局配置（用于 cache 等）
+    _, _, _, _, cache_config = load_global_config()
 
     # CLI 参数覆盖 YAML 配置
-    if args.device_type:
-        device_config.device_type = args.device_type
-    if args.device_id:
-        device_config.device_id = args.device_id
+    device_type_str = args.device_type or device_config.device_type
+    device_id = args.device_id or device_config.device_id
 
-    # 初始化设备
-    device_type_map = {
-        "adb": DeviceType.ADB,
-        "hdc": DeviceType.HDC,
-        "ios": DeviceType.IOS,
-    }
-    set_device_type(device_type_map.get(device_config.device_type, DeviceType.ADB))
+    # 创建设备实例（不再是全局单例）
+    device = create_device(DeviceType(device_type_str), device_id)
 
-    # 初始化组件
-    model_config = ModelConfig(
-        base_url=autoglm_config.base_url,
-        api_key=autoglm_config.api_key,
-        model_name=autoglm_config.model,
-        max_tokens=autoglm_config.max_tokens,
-        temperature=autoglm_config.temperature,
+    # 创建模型适配器
+    action_model = create_action_model(
+        provider=model_config.provider,
+        base_url=model_config.base_url,
+        api_key=model_config.api_key,
+        model=model_config.model,
+        max_tokens=model_config.max_tokens,
+        temperature=model_config.temperature,
+        lang=model_config.lang,
+        custom_rules=model_config.custom_rules,
     )
 
+    # 初始化 Action 缓存
+    action_cache = None
+    if cache_config.enabled and not args.no_cache:
+        action_cache = _create_action_cache(cache_config)
+
+    # 初始化 PageDescriber（复用 VLM 配置）
+    from describer import PageDescriber
+    page_describer = PageDescriber(vlm_config) if vlm_config else None
+
+    # 初始化 ActionOptimizer（复用 LLM 配置）
+    from optimizer import ActionOptimizer
+    action_optimizer = ActionOptimizer(llm_config) if llm_config else None
+
+    # 组装
     executor = TestExecutor(
-        model_config=model_config,
-        device_id=device_config.device_id,
-        lang=autoglm_config.lang,
+        model=action_model, device=device, action_cache=action_cache,
+        page_describer=page_describer, action_optimizer=action_optimizer,
     )
     asserter = Asserter(vlm_config)
-    screenshot_mgr = ScreenshotManager()
+    screenshot_mgr = ScreenshotManager(device=device)
 
     # 运行测试
     runner = TestRunner(executor, asserter, screenshot_mgr)
@@ -118,29 +129,52 @@ def run_test(args):
     sys.exit(0 if result.failed == 0 else 1)
 
 
+def _create_action_cache(cache_config):
+    """创建 ActionCache 实例"""
+    from cache import ActionCache, CacheStore, Embedder
+
+    store = CacheStore(cache_config.db_path)
+    embedder = Embedder()
+    return ActionCache(
+        embedder=embedder,
+        store=store,
+        similarity_threshold=cache_config.similarity_threshold,
+        region_similarity_threshold=cache_config.region_similarity_threshold,
+        ttl_days=cache_config.ttl_days,
+    )
+
+
 def generate_test(args):
     """模式 2：自然语言 → 生成 YAML 文件"""
     _setup_logging(args.verbose)
 
-    from config.settings import PlannerConfig
-    from planner import plan_test_case, generate_yaml_content
+    from config.loader import load_global_config
+    from planner import plan_test_case, generate_yaml_content, append_to_yaml
 
-    planner_config = PlannerConfig()
+    _, _, _, llm_config, _ = load_global_config()
 
     print(f"\n规划中: {args.description}\n")
 
     try:
-        test_case = plan_test_case(args.description, planner_config)
+        test_case = plan_test_case(args.description, llm_config)
     except ValueError as e:
         print(f"规划失败: {e}", file=sys.stderr)
         sys.exit(1)
 
-    yaml_content = generate_yaml_content(
-        test_case,
-        device_type=args.device_type,
-    )
-
-    if args.output:
+    if args.output and os.path.exists(args.output):
+        # 追加模式：向已有 YAML 文件追加新 task
+        append_to_yaml(args.output, test_case)
+        print(f"已追加到: {args.output}")
+        print(f"  新用例: {test_case.name}")
+        print(f"  步骤数: {len(test_case.steps)}")
+        print(f"\n可通过以下命令执行:")
+        print(f"  python main.py run {args.output}")
+    elif args.output:
+        # 新建模式
+        yaml_content = generate_yaml_content(
+            test_case,
+            device_type=args.device_type,
+        )
         with open(args.output, "w", encoding="utf-8") as f:
             f.write(yaml_content)
         print(f"已生成: {args.output}")
@@ -149,6 +183,10 @@ def generate_test(args):
         print(f"\n可通过以下命令执行:")
         print(f"  python main.py run {args.output}")
     else:
+        yaml_content = generate_yaml_content(
+            test_case,
+            device_type=args.device_type,
+        )
         print("--- 生成的 YAML ---\n")
         print(yaml_content)
 
@@ -160,47 +198,50 @@ def interactive_test(args):
     """模式 3：交互式测试"""
     _setup_logging(args.verbose)
 
-    from phone_agent.device_factory import DeviceType, set_device_type
-    from phone_agent.model.client import ModelConfig
-
+    from device import DeviceType, create_device
+    from executor.models import create_action_model
+    from executor import TestExecutor
     from asserter import Asserter
-    from config.settings import AutoGLMConfig, PlannerConfig, VLMConfig
+    from config.loader import load_global_config
     from planner import plan_test_case
     from runner import TestRunner
-    from executor import TestExecutor
     from screenshot import ScreenshotManager
     from suite import TestSuite
 
-    # 使用默认配置（环境变量）
-    autoglm_config = AutoGLMConfig()
-    vlm_config = VLMConfig()
-    planner_config = PlannerConfig()
+    # 使用全局配置（替代硬编码默认值）
+    device_config, model_config, vlm_config, llm_config, _ = load_global_config()
 
-    # 初始化设备
-    device_type = args.device_type or "adb"
-    device_type_map = {
-        "adb": DeviceType.ADB,
-        "hdc": DeviceType.HDC,
-        "ios": DeviceType.IOS,
-    }
-    set_device_type(device_type_map.get(device_type, DeviceType.ADB))
+    # 创建设备实例（CLI 参数 > 全局配置）
+    device_type_str = args.device_type or device_config.device_type
+    device = create_device(DeviceType(device_type_str), args.device_id or device_config.device_id)
 
-    # 初始化组件
-    model_config = ModelConfig(
-        base_url=autoglm_config.base_url,
-        api_key=autoglm_config.api_key,
-        model_name=autoglm_config.model,
-        max_tokens=autoglm_config.max_tokens,
-        temperature=autoglm_config.temperature,
+    # 创建模型适配器
+    action_model = create_action_model(
+        provider=model_config.provider,
+        base_url=model_config.base_url,
+        api_key=model_config.api_key,
+        model=model_config.model,
+        max_tokens=model_config.max_tokens,
+        temperature=model_config.temperature,
+        lang=model_config.lang,
+        custom_rules=model_config.custom_rules,
     )
 
+    # 初始化 PageDescriber（复用 VLM 配置）
+    from describer import PageDescriber
+    page_describer = PageDescriber(vlm_config) if vlm_config else None
+
+    # 初始化 ActionOptimizer（复用 LLM 配置）
+    from optimizer import ActionOptimizer
+    action_optimizer = ActionOptimizer(llm_config) if llm_config else None
+
+    # 组装
     executor = TestExecutor(
-        model_config=model_config,
-        device_id=args.device_id,
-        lang=autoglm_config.lang,
+        model=action_model, device=device,
+        page_describer=page_describer, action_optimizer=action_optimizer,
     )
     asserter = Asserter(vlm_config)
-    screenshot_mgr = ScreenshotManager()
+    screenshot_mgr = ScreenshotManager(device=device)
     runner = TestRunner(executor, asserter, screenshot_mgr)
 
     print("\n" + "=" * 60)
@@ -227,7 +268,7 @@ def interactive_test(args):
         # 规划
         print(f"\n规划中...\n")
         try:
-            test_case = plan_test_case(description, planner_config)
+            test_case = plan_test_case(description, llm_config)
         except ValueError as e:
             print(f"规划失败: {e}")
             continue

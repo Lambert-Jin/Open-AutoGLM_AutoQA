@@ -1,0 +1,36 @@
+# AutoQA 全局默认配置
+# 优先级：YAML 测试用例 > 此文件 > 代码默认值
+
+device:
+  type: android
+  # id: "device-id"       # 可选，不指定则自动检测
+
+config:
+  action_model:
+    provider: "autoglm"
+    base_url: "${AUTOGLM_BASE_URL}"
+    api_key: "${AUTOGLM_API_KEY}"
+    model: "autoglm-phone"
+    max_tokens: 3000
+    temperature: 0.1
+    lang: "cn"
+    # custom_rules: []
+
+  vlm:
+    provider: "gemini"
+    api_key: "${GEMINI_API_KEY}"
+    model: "gemini-3-pro-image-preview"
+    temperature: 0.1
+    max_tokens: 1000
+
+  llm:
+    provider: "gemini"
+    api_key: "${GEMINI_API_KEY}"
+    model: "gemini-3.1-pro-preview"
+    temperature: 0.3
+    max_tokens: 2000
+
+  cache:
+    enabled: true
+    similarity_threshold: 0.85
+    ttl_days: 30

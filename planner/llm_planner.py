@@ -8,25 +8,25 @@ import re
 
 import yaml
 
-from config.settings import PlannerConfig
+from config.settings import LLMConfig
 from planner.prompts import PLANNER_SYSTEM_PROMPT
 from suite import ActionStep, AssertStep, Step, TestCase, TestSuite
 
 logger = logging.getLogger(__name__)
 
 
-def plan_test_case(description: str, planner_config: PlannerConfig) -> TestCase:
+def plan_test_case(description: str, llm_config: LLMConfig) -> TestCase:
     """
     将自然语言描述转换为 TestCase。
 
     Args:
         description: 自然语言测试描述
-        planner_config: 规划器 LLM 配置
+        llm_config: LLM 配置
 
     Returns:
         解析后的 TestCase
     """
-    response = _call_llm(PLANNER_SYSTEM_PROMPT, description, planner_config)
+    response = _call_llm(PLANNER_SYSTEM_PROMPT, description, llm_config)
     return _parse_plan_response(response)
 
 
@@ -46,7 +46,8 @@ def generate_yaml_content(
         "name": suite_name,
         "device": {"type": device_type},
         "config": {
-            "autoglm": {
+            "action_model": {
+                "provider": "autoglm",
                 "base_url": "${AUTOGLM_BASE_URL}",
                 "api_key": "${AUTOGLM_API_KEY}",
                 "model": "autoglm-phone",
@@ -63,12 +64,35 @@ def generate_yaml_content(
     return yaml.dump(data, allow_unicode=True, default_flow_style=False, sort_keys=False)
 
 
+def append_to_yaml(path: str, test_case: TestCase):
+    """向已有 YAML 文件追加一个 task。
+
+    Args:
+        path: 已有 YAML 文件路径
+        test_case: 要追加的 TestCase
+    """
+    with open(path, "r", encoding="utf-8") as f:
+        data = yaml.safe_load(f)
+
+    if data is None:
+        data = {}
+
+    if "tasks" not in data:
+        data["tasks"] = []
+    data["tasks"].append(_test_case_to_dict(test_case))
+
+    with open(path, "w", encoding="utf-8") as f:
+        yaml.dump(data, f, allow_unicode=True, default_flow_style=False, sort_keys=False)
+
+
 def _test_case_to_dict(case: TestCase) -> dict:
     """将 TestCase 转为 YAML 兼容的字典"""
     flow = []
     for step in case.steps:
         if isinstance(step, ActionStep):
             item = {"action": step.description}
+            if step.cache_key:
+                item["cache_key"] = step.cache_key
             if step.timeout != 30:
                 item["timeout"] = step.timeout
         elif isinstance(step, AssertStep):
@@ -85,49 +109,20 @@ def _test_case_to_dict(case: TestCase) -> dict:
     return {"name": case.name, "flow": flow}
 
 
-def _call_llm(system_prompt: str, user_prompt: str, config: PlannerConfig) -> str:
-    """调用 LLM 进行文本生成（不需要图片）"""
-    if config.provider == "gemini":
-        return _call_gemini(system_prompt, user_prompt, config)
-    elif config.provider == "qwen":
-        return _call_qwen(system_prompt, user_prompt, config)
-    else:
-        raise ValueError(f"Unsupported provider for planner: {config.provider}")
+def _call_llm(system_prompt: str, user_prompt: str, config: LLMConfig) -> str:
+    """通过统一 Provider 层调用 LLM"""
+    from providers import create_provider
 
-
-def _call_gemini(system_prompt: str, user_prompt: str, config: PlannerConfig) -> str:
-    """通过 Google GenAI SDK 调用 Gemini"""
-    from google import genai
-    from google.genai import types
-
-    client = genai.Client(api_key=config.api_key)
-    response = client.models.generate_content(
+    provider = create_provider(
+        provider=config.provider,
+        api_key=config.api_key,
         model=config.model,
-        contents=user_prompt,
-        config=types.GenerateContentConfig(
-            system_instruction=system_prompt,
-            temperature=config.temperature,
-            max_output_tokens=config.max_tokens,
-        ),
-    )
-    return response.text
-
-
-def _call_qwen(system_prompt: str, user_prompt: str, config: PlannerConfig) -> str:
-    """通过 OpenAI 兼容 API 调用 Qwen"""
-    from openai import OpenAI
-
-    client = OpenAI(base_url=config.base_url, api_key=config.api_key)
-    response = client.chat.completions.create(
-        model=config.model,
-        messages=[
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": user_prompt},
-        ],
+        base_url=config.base_url,
         temperature=config.temperature,
         max_tokens=config.max_tokens,
     )
-    return response.choices[0].message.content
+    messages = [{"role": "user", "content": user_prompt}]
+    return provider.chat(messages, system_prompt=system_prompt)
 
 
 def _parse_plan_response(response: str) -> TestCase:
@@ -152,6 +147,7 @@ def _parse_plan_response(response: str) -> TestCase:
             steps.append(ActionStep(
                 description=item["action"],
                 timeout=item.get("timeout", 30),
+                cache_key=item.get("cache_key", ""),
             ))
         elif "assert" in item:
             steps.append(AssertStep(

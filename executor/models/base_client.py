@@ -105,7 +105,7 @@ class BaseModelClient:
                 if first_token_time is None:
                     first_token_time = time.time() - start
                 content += delta
-                logger.debug("stream token: %s", delta)
+                # logger.debug("stream token: %s", delta)
 
         return ModelOutput(
             thinking="",

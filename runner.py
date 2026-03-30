@@ -3,13 +3,9 @@
 from __future__ import annotations
 
 import logging
-import subprocess
-import time
-
-from phone_agent.device_factory import get_device_factory
 
 from asserter import Asserter
-from config.settings import AssertResult, VLMConfig
+from config.settings import AssertResult
 from executor import ExecutorActionResult, TestExecutor
 from screenshot import ScreenshotManager
 from suite import (
@@ -37,7 +33,7 @@ class TestRunner:
     ):
         self.executor = executor
         self.asserter = asserter
-        self.screenshot_mgr = screenshot_mgr or ScreenshotManager()
+        self.screenshot_mgr = screenshot_mgr or ScreenshotManager(device=executor.device)
 
     def run_suite(self, suite: TestSuite) -> TestSuiteResult:
         """运行整个测试套件"""
@@ -69,7 +65,11 @@ class TestRunner:
 
         for i, step in enumerate(case.steps, 1):
             if isinstance(step, ActionStep):
-                result = self._run_action(step, i)
+                next_action = self._peek_next_action(case.steps, i)
+                result = self._run_action(
+                    step, i,
+                    next_instruction=next_action.description if next_action else None,
+                )
             elif isinstance(step, AssertStep):
                 result = self._run_assert(step, i)
             else:
@@ -84,13 +84,16 @@ class TestRunner:
         status = "passed" if all(r.success for r in step_results) else "failed"
         return TestCaseResult(case_name=case.name, steps=step_results, status=status)
 
-    def _run_action(self, step: ActionStep, step_num: int) -> StepResult:
+    def _run_action(self, step: ActionStep, step_num: int, next_instruction: str | None = None) -> StepResult:
         """执行操作步骤"""
         timing = Timing.start_now()
 
         print(f"  Step {step_num}: [操作] {step.description} ... ", end="", flush=True)
 
-        result: ExecutorActionResult = self.executor.execute_action(step.description)
+        result: ExecutorActionResult = self.executor.execute_action(
+            step.description, cache_key=step.cache_key,
+            next_instruction=next_instruction,
+        )
 
         timing.stop()
         duration = timing.duration_ms / 1000
@@ -113,8 +116,8 @@ class TestRunner:
 
         print(f"  Step {step_num}: [断言] {step.expectation} ... ", end="", flush=True)
 
-        # 截图并断言
-        screenshot = self.screenshot_mgr.capture(get_device_factory())
+        # 截图并断言（直接用已绑定 device 的 screenshot_mgr）
+        screenshot = self.screenshot_mgr.capture()
         result: AssertResult = self.asserter.verify(screenshot, step.expectation)
 
         # 容错：断言失败 → 清理环境 → 重试
@@ -124,7 +127,7 @@ class TestRunner:
 
             self.executor.handle_unexpected(step.retry_cleanup)
 
-            screenshot = self.screenshot_mgr.capture(get_device_factory())
+            screenshot = self.screenshot_mgr.capture()
             result = self.asserter.verify(screenshot, step.expectation)
             result.retried = True
 
@@ -146,23 +149,21 @@ class TestRunner:
             detail=result,
         )
 
+    @staticmethod
+    def _peek_next_action(steps: list, current_index: int) -> ActionStep | None:
+        """向前查找下一个 ActionStep（current_index 从 1 开始）"""
+        for step in steps[current_index:]:
+            if isinstance(step, ActionStep):
+                return step
+        return None
+
     def _cleanup_device(self):
         """用例间清理：回桌面 + 关闭所有后台 App"""
-        device_id = self.executor.action_handler.device_id
-        adb_prefix = ["adb"]
-        if device_id:
-            adb_prefix += ["-s", device_id]
-
+        device = self.executor.device
         print("  [清理] 回到桌面，关闭后台 App ... ", end="", flush=True)
         try:
-            subprocess.run(
-                adb_prefix + ["shell", "input", "keyevent", "KEYCODE_HOME"],
-                capture_output=True, timeout=5,
-            )
-            subprocess.run(
-                adb_prefix + ["shell", "am", "kill-all"],
-                capture_output=True, timeout=5,
-            )
+            device.home()
+            device.kill_all_apps()
             print("OK")
         except Exception as e:
             print(f"WARN ({e})")
@@ -170,8 +171,8 @@ class TestRunner:
 
     @staticmethod
     def _print_case_summary(result: TestCaseResult):
-        icon = "✅" if result.status == "passed" else "❌"
-        print(f"\n  {icon} 用例结果: {result.case_name} — "
+        icon = "+" if result.status == "passed" else "x"
+        print(f"\n  [{icon}] 用例结果: {result.case_name} — "
               f"{result.passed_count}/{result.total_count} passed\n")
 
     @staticmethod
@@ -183,7 +184,7 @@ class TestRunner:
         # 列出失败详情
         for case in result.cases:
             if case.status == "failed":
-                print(f"\n  ❌ {case.case_name}:")
+                print(f"\n  [x] {case.case_name}:")
                 for i, step_result in enumerate(case.steps, 1):
                     if not step_result.success:
                         step = step_result.step
@@ -199,7 +200,7 @@ class TestRunner:
                             print(f"     Step {i} [操作失败] {step.description}{error}")
 
         if result.failed == 0:
-            print(f"\n  ✅ {result.suite_name}")
+            print(f"\n  [+] {result.suite_name}")
         else:
-            print(f"\n  ❌ {result.suite_name}")
+            print(f"\n  [x] {result.suite_name}")
         print(f"{'='*60}\n")

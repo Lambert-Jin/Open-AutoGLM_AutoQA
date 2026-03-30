@@ -1,7 +1,9 @@
 from config.settings import (
+    ActionModelConfig,
     AssertResult,
-    AutoGLMConfig,
     DeviceConfig,
+    LLMConfig,
     Screenshot,
     VLMConfig,
 )
+from config.loader import load_global_config

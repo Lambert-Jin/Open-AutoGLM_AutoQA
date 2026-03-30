@@ -1,4 +1,4 @@
-"""VLM Provider 公共工具"""
+"""Provider 公共工具"""
 
 from __future__ import annotations
 
