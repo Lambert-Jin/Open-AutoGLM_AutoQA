@@ -67,23 +67,6 @@ class DeviceConfig:
     device_id: str | None = None    # None 为自动检测
 
 
-@dataclass
-class Screenshot:
-    """一次截图的数据"""
-    base64: str                     # 图片 base64 编码
-    width: int = 0
-    height: int = 0
-    timestamp: float = 0.0         # time.time()
-    id: str = ""                    # 唯一标识，用于报告关联
-
-    def __post_init__(self):
-        import time
-        import uuid
-        if not self.timestamp:
-            self.timestamp = time.time()
-        if not self.id:
-            self.id = uuid.uuid4().hex[:8]
-
 
 @dataclass
 class CacheConfig:
