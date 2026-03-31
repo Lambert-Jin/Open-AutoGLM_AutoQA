@@ -6,7 +6,7 @@ import os
 
 import yaml
 
-from config.loader import _config_from_dict
+from config.loader import _config_from_dict, _map_device_type
 from config.settings import ActionModelConfig, DeviceConfig, LLMConfig, VLMConfig
 from suite import ActionStep, AssertStep, Step, TestCase, TestSuite
 from utils.text import resolve_dict as _resolve_dict
@@ -87,13 +87,3 @@ def _parse_test_case(raw: dict) -> TestCase:
     )
 
 
-def _map_device_type(device_type: str) -> str:
-    """映射 YAML 中的设备类型到 DeviceConfig 的值"""
-    mapping = {
-        "android": "adb",
-        "harmony": "hdc",
-        "ios": "ios",
-        "adb": "adb",
-        "hdc": "hdc",
-    }
-    return mapping.get(device_type, "adb")
