@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import logging
 import os
-import re
 from pathlib import Path
 
 import yaml
@@ -16,32 +15,11 @@ from config.settings import (
     LLMConfig,
     VLMConfig,
 )
+from utils.text import resolve_dict as _resolve_dict
 
 logger = logging.getLogger(__name__)
 
 _CONFIG_PATH = Path(__file__).resolve().parent.parent / "config.yaml"
-
-
-def _resolve_env_vars(value: str) -> str:
-    """将 ${VAR} 替换为环境变量值，缺失时保留原文"""
-    def _replace(match):
-        return os.environ.get(match.group(1), match.group(0))
-    return re.sub(r"\$\{(\w+)\}", _replace, value)
-
-
-def _resolve_dict(data: dict) -> dict:
-    """递归解析字典中所有字符串的环境变量"""
-    result = {}
-    for key, value in data.items():
-        if isinstance(value, str):
-            result[key] = _resolve_env_vars(value)
-        elif isinstance(value, dict):
-            result[key] = _resolve_dict(value)
-        elif isinstance(value, list):
-            result[key] = [_resolve_dict(v) if isinstance(v, dict) else v for v in value]
-        else:
-            result[key] = value
-    return result
 
 
 def load_global_config(
@@ -67,12 +45,13 @@ def load_global_config(
     with open(path, "r", encoding="utf-8") as f:
         raw = yaml.safe_load(f) or {}
 
-    raw = _resolve_dict(raw)
+    raw = _resolve_dict(raw, strict=False)
 
     # device
     device_raw = raw.get("device", {})
+    raw_type = device_raw.get("type", "adb")
     device_config = DeviceConfig(
-        device_type=device_raw.get("type", "adb"),
+        device_type=_map_device_type(raw_type),
         device_id=device_raw.get("id"),
     )
 
@@ -124,3 +103,15 @@ def load_global_config(
     )
 
     return device_config, action_model_config, vlm_config, llm_config, cache_config
+
+
+def _map_device_type(device_type: str) -> str:
+    """映射用户友好的设备类型到内部值"""
+    mapping = {
+        "android": "adb",
+        "harmony": "hdc",
+        "ios": "ios",
+        "adb": "adb",
+        "hdc": "hdc",
+    }
+    return mapping.get(device_type, "adb")

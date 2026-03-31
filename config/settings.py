@@ -2,21 +2,9 @@
 
 from __future__ import annotations
 
-import os
-import re
 from dataclasses import dataclass, field
 
-
-def _resolve_env_vars(value: str) -> str:
-    """将 ${VAR} 替换为对应环境变量的值"""
-    def _replace(match: re.Match) -> str:
-        var_name = match.group(1)
-        env_val = os.environ.get(var_name)
-        if env_val is None:
-            raise ValueError(f"Environment variable '{var_name}' is not set")
-        return env_val
-
-    return re.sub(r"\$\{(\w+)\}", _replace, value)
+from utils.text import resolve_env_vars as _resolve_env_vars
 
 
 @dataclass

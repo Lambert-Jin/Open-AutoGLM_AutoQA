@@ -3,34 +3,12 @@
 from __future__ import annotations
 
 import os
-import re
 
 import yaml
 
 from config.settings import ActionModelConfig, DeviceConfig, LLMConfig, VLMConfig
 from suite import ActionStep, AssertStep, Step, TestCase, TestSuite
-
-
-def _resolve_env_vars(value: str) -> str:
-    """将 ${VAR} 替换为环境变量值，缺失时保留原文"""
-    def _replace(match: re.Match) -> str:
-        return os.environ.get(match.group(1), match.group(0))
-    return re.sub(r"\$\{(\w+)\}", _replace, value)
-
-
-def _resolve_dict(data: dict) -> dict:
-    """递归解析字典中所有字符串的环境变量"""
-    result = {}
-    for key, value in data.items():
-        if isinstance(value, str):
-            result[key] = _resolve_env_vars(value)
-        elif isinstance(value, dict):
-            result[key] = _resolve_dict(value)
-        elif isinstance(value, list):
-            result[key] = [_resolve_dict(v) if isinstance(v, dict) else v for v in value]
-        else:
-            result[key] = value
-    return result
+from utils.text import resolve_dict as _resolve_dict
 
 
 def parse_yaml(path: str) -> tuple[TestSuite, DeviceConfig, ActionModelConfig, VLMConfig, LLMConfig]:
@@ -48,7 +26,7 @@ def parse_yaml(path: str) -> tuple[TestSuite, DeviceConfig, ActionModelConfig, V
     with open(path, "r", encoding="utf-8") as f:
         raw = yaml.safe_load(f)
 
-    raw = _resolve_dict(raw)
+    raw = _resolve_dict(raw, strict=False)
 
     # device: YAML > 全局配置
     device_raw = raw.get("device", {})
