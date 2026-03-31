@@ -25,7 +25,7 @@ def parse_yaml(path: str) -> tuple[TestSuite, DeviceConfig, ActionModelConfig, V
     global_device, global_model, global_vlm, global_llm, _ = load_global_config()
 
     with open(path, "r", encoding="utf-8") as f:
-        raw = yaml.safe_load(f)
+        raw = yaml.safe_load(f) or {}
 
     raw = _resolve_dict(raw, strict=False)
 
@@ -85,5 +85,4 @@ def _parse_test_case(raw: dict) -> TestCase:
         continue_on_error=raw.get("continueOnError", False),
         description=raw.get("description", ""),
     )
-
 
