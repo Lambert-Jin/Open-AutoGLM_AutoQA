@@ -58,51 +58,44 @@ def load_global_config(
     config_raw = raw.get("config", {})
 
     # action_model
-    am = config_raw.get("action_model", {})
-    action_model_config = ActionModelConfig(
-        provider=am.get("provider", "autoglm"),
-        base_url=am.get("base_url", "${AUTOGLM_BASE_URL}"),
-        api_key=am.get("api_key", "${AUTOGLM_API_KEY}"),
-        model=am.get("model", "autoglm-phone"),
-        max_tokens=am.get("max_tokens", 3000),
-        temperature=am.get("temperature", 0.1),
-        lang=am.get("lang", "cn"),
-        custom_rules=am.get("custom_rules", []),
+    action_model_config = _config_from_dict(
+        ActionModelConfig, config_raw.get("action_model", {}),
     )
 
     # vlm
-    vm = config_raw.get("vlm", {})
-    vlm_config = VLMConfig(
-        provider=vm.get("provider", "gemini"),
-        base_url=vm.get("base_url", ""),
-        api_key=vm.get("api_key", "${GEMINI_API_KEY}"),
-        model=vm.get("model", "gemini-3-pro-image-preview"),
-        temperature=vm.get("temperature", 0.1),
-        max_tokens=vm.get("max_tokens", 1000),
+    vlm_config = _config_from_dict(
+        VLMConfig, config_raw.get("vlm", {}),
     )
 
-    # llm（Planner + Optimizer 共用）
-    lm = config_raw.get("llm", {})
-    llm_config = LLMConfig(
-        provider=lm.get("provider", "gemini"),
-        base_url=lm.get("base_url", ""),
-        api_key=lm.get("api_key", "${GEMINI_API_KEY}"),
-        model=lm.get("model", "gemini-3.1-pro-preview"),
-        temperature=lm.get("temperature", 0.3),
-        max_tokens=lm.get("max_tokens", 2000),
+    # llm
+    llm_config = _config_from_dict(
+        LLMConfig, config_raw.get("llm", {}),
     )
 
     # cache
-    ca = config_raw.get("cache", {})
-    cache_config = CacheConfig(
-        enabled=ca.get("enabled", True),
-        similarity_threshold=ca.get("similarity_threshold", 0.85),
-        region_similarity_threshold=ca.get("region_similarity_threshold", 0.8),
-        ttl_days=ca.get("ttl_days", 30),
-        db_path=ca.get("db_path", ".cache/action_cache.db"),
+    cache_config = _config_from_dict(
+        CacheConfig, config_raw.get("cache", {}),
     )
 
     return device_config, action_model_config, vlm_config, llm_config, cache_config
+
+
+def _config_from_dict(cls, raw: dict, defaults=None):
+    """从 dict 构造 dataclass 实例，仅取 dataclass 字段名对应的 key。
+
+    Args:
+        cls: dataclass 类
+        raw: 原始 dict
+        defaults: 可选的 fallback dataclass 实例（YAML > defaults > field default）
+    """
+    import dataclasses
+    kwargs = {}
+    for f in dataclasses.fields(cls):
+        if f.name in raw:
+            kwargs[f.name] = raw[f.name]
+        elif defaults is not None:
+            kwargs[f.name] = getattr(defaults, f.name)
+    return cls(**kwargs)
 
 
 def _map_device_type(device_type: str) -> str:

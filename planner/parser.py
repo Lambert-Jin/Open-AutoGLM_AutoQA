@@ -6,6 +6,7 @@ import os
 
 import yaml
 
+from config.loader import _config_from_dict
 from config.settings import ActionModelConfig, DeviceConfig, LLMConfig, VLMConfig
 from suite import ActionStep, AssertStep, Step, TestCase, TestSuite
 from utils.text import resolve_dict as _resolve_dict
@@ -39,38 +40,18 @@ def parse_yaml(path: str) -> tuple[TestSuite, DeviceConfig, ActionModelConfig, V
     config_raw = raw.get("config", {})
 
     # action_model: YAML > 全局配置
-    model_raw = config_raw.get("action_model", {})
-    model_config = ActionModelConfig(
-        provider=model_raw.get("provider", global_model.provider),
-        base_url=model_raw.get("base_url", global_model.base_url),
-        api_key=model_raw.get("api_key", global_model.api_key),
-        model=model_raw.get("model", global_model.model),
-        max_tokens=model_raw.get("max_tokens", global_model.max_tokens),
-        temperature=model_raw.get("temperature", global_model.temperature),
-        lang=model_raw.get("lang", global_model.lang),
-        custom_rules=model_raw.get("custom_rules", global_model.custom_rules),
+    model_config = _config_from_dict(
+        ActionModelConfig, config_raw.get("action_model", {}), defaults=global_model,
     )
 
     # vlm: YAML > 全局配置
-    vlm_raw = config_raw.get("vlm", {})
-    vlm_config = VLMConfig(
-        provider=vlm_raw.get("provider", global_vlm.provider),
-        base_url=vlm_raw.get("base_url", global_vlm.base_url),
-        api_key=vlm_raw.get("api_key", global_vlm.api_key),
-        model=vlm_raw.get("model", global_vlm.model),
-        temperature=vlm_raw.get("temperature", global_vlm.temperature),
-        max_tokens=vlm_raw.get("max_tokens", global_vlm.max_tokens),
+    vlm_config = _config_from_dict(
+        VLMConfig, config_raw.get("vlm", {}), defaults=global_vlm,
     )
 
     # llm: YAML > 全局配置
-    llm_raw = config_raw.get("llm", {})
-    llm_config = LLMConfig(
-        provider=llm_raw.get("provider", global_llm.provider),
-        base_url=llm_raw.get("base_url", global_llm.base_url),
-        api_key=llm_raw.get("api_key", global_llm.api_key),
-        model=llm_raw.get("model", global_llm.model),
-        temperature=llm_raw.get("temperature", global_llm.temperature),
-        max_tokens=llm_raw.get("max_tokens", global_llm.max_tokens),
+    llm_config = _config_from_dict(
+        LLMConfig, config_raw.get("llm", {}), defaults=global_llm,
     )
 
     # tasks
