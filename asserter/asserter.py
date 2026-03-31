@@ -4,12 +4,12 @@ from __future__ import annotations
 
 import json
 import logging
-import re
 
 from asserter.prompts import ASSERT_SYSTEM_PROMPT
 from config.settings import AssertResult, Screenshot, VLMConfig
 from providers import create_provider
 from providers._utils import guess_mime_type
+from utils.text import strip_markdown_json
 
 logger = logging.getLogger(__name__)
 
@@ -42,9 +42,7 @@ class Asserter:
 
     def _parse_response(self, raw: str) -> AssertResult:
         """解析 VLM 响应为 AssertResult，容忍 markdown 代码块包裹"""
-        # 去掉可能的 ```json ... ``` 包裹
-        cleaned = re.sub(r"^```(?:json)?\s*", "", raw.strip())
-        cleaned = re.sub(r"\s*```$", "", cleaned)
+        cleaned = strip_markdown_json(raw)
 
         try:
             data = json.loads(cleaned)
