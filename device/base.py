@@ -21,6 +21,16 @@ class DeviceScreenshot:
     width: int
     height: int
     is_sensitive: bool = False  # 是否为敏感屏幕（截图受限）
+    timestamp: float = 0.0
+    id: str = ""
+
+    def __post_init__(self):
+        import time
+        import uuid
+        if not self.timestamp:
+            self.timestamp = time.time()
+        if not self.id:
+            self.id = uuid.uuid4().hex[:8]
 
 
 @runtime_checkable

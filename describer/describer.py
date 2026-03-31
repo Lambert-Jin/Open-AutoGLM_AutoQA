@@ -37,5 +37,5 @@ class PageDescriber:
             ],
         }]
         raw = self.provider.chat(messages, system_prompt=DESCRIBE_SYSTEM_PROMPT)
-        logger
+        logger.debug("页面描述完成: %s", raw[:100])
         return raw.strip()

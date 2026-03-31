@@ -3,34 +3,13 @@
 from __future__ import annotations
 
 import os
-import re
 
 import yaml
 
+from config.loader import _config_from_dict, _map_device_type
 from config.settings import ActionModelConfig, DeviceConfig, LLMConfig, VLMConfig
 from suite import ActionStep, AssertStep, Step, TestCase, TestSuite
-
-
-def _resolve_env_vars(value: str) -> str:
-    """将 ${VAR} 替换为环境变量值，缺失时保留原文"""
-    def _replace(match: re.Match) -> str:
-        return os.environ.get(match.group(1), match.group(0))
-    return re.sub(r"\$\{(\w+)\}", _replace, value)
-
-
-def _resolve_dict(data: dict) -> dict:
-    """递归解析字典中所有字符串的环境变量"""
-    result = {}
-    for key, value in data.items():
-        if isinstance(value, str):
-            result[key] = _resolve_env_vars(value)
-        elif isinstance(value, dict):
-            result[key] = _resolve_dict(value)
-        elif isinstance(value, list):
-            result[key] = [_resolve_dict(v) if isinstance(v, dict) else v for v in value]
-        else:
-            result[key] = value
-    return result
+from utils.text import resolve_dict as _resolve_dict
 
 
 def parse_yaml(path: str) -> tuple[TestSuite, DeviceConfig, ActionModelConfig, VLMConfig, LLMConfig]:
@@ -46,9 +25,9 @@ def parse_yaml(path: str) -> tuple[TestSuite, DeviceConfig, ActionModelConfig, V
     global_device, global_model, global_vlm, global_llm, _ = load_global_config()
 
     with open(path, "r", encoding="utf-8") as f:
-        raw = yaml.safe_load(f)
+        raw = yaml.safe_load(f) or {}
 
-    raw = _resolve_dict(raw)
+    raw = _resolve_dict(raw, strict=False)
 
     # device: YAML > 全局配置
     device_raw = raw.get("device", {})
@@ -61,38 +40,18 @@ def parse_yaml(path: str) -> tuple[TestSuite, DeviceConfig, ActionModelConfig, V
     config_raw = raw.get("config", {})
 
     # action_model: YAML > 全局配置
-    model_raw = config_raw.get("action_model", {})
-    model_config = ActionModelConfig(
-        provider=model_raw.get("provider", global_model.provider),
-        base_url=model_raw.get("base_url", global_model.base_url),
-        api_key=model_raw.get("api_key", global_model.api_key),
-        model=model_raw.get("model", global_model.model),
-        max_tokens=model_raw.get("max_tokens", global_model.max_tokens),
-        temperature=model_raw.get("temperature", global_model.temperature),
-        lang=model_raw.get("lang", global_model.lang),
-        custom_rules=model_raw.get("custom_rules", global_model.custom_rules),
+    model_config = _config_from_dict(
+        ActionModelConfig, config_raw.get("action_model", {}), defaults=global_model,
     )
 
     # vlm: YAML > 全局配置
-    vlm_raw = config_raw.get("vlm", {})
-    vlm_config = VLMConfig(
-        provider=vlm_raw.get("provider", global_vlm.provider),
-        base_url=vlm_raw.get("base_url", global_vlm.base_url),
-        api_key=vlm_raw.get("api_key", global_vlm.api_key),
-        model=vlm_raw.get("model", global_vlm.model),
-        temperature=vlm_raw.get("temperature", global_vlm.temperature),
-        max_tokens=vlm_raw.get("max_tokens", global_vlm.max_tokens),
+    vlm_config = _config_from_dict(
+        VLMConfig, config_raw.get("vlm", {}), defaults=global_vlm,
     )
 
     # llm: YAML > 全局配置
-    llm_raw = config_raw.get("llm", {})
-    llm_config = LLMConfig(
-        provider=llm_raw.get("provider", global_llm.provider),
-        base_url=llm_raw.get("base_url", global_llm.base_url),
-        api_key=llm_raw.get("api_key", global_llm.api_key),
-        model=llm_raw.get("model", global_llm.model),
-        temperature=llm_raw.get("temperature", global_llm.temperature),
-        max_tokens=llm_raw.get("max_tokens", global_llm.max_tokens),
+    llm_config = _config_from_dict(
+        LLMConfig, config_raw.get("llm", {}), defaults=global_llm,
     )
 
     # tasks
@@ -127,14 +86,3 @@ def _parse_test_case(raw: dict) -> TestCase:
         description=raw.get("description", ""),
     )
 
-
-def _map_device_type(device_type: str) -> str:
-    """映射 YAML 中的设备类型到 DeviceConfig 的值"""
-    mapping = {
-        "android": "adb",
-        "harmony": "hdc",
-        "ios": "ios",
-        "adb": "adb",
-        "hdc": "hdc",
-    }
-    return mapping.get(device_type, "adb")

@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import logging
 import os
-import re
 from pathlib import Path
 
 import yaml
@@ -16,32 +15,11 @@ from config.settings import (
     LLMConfig,
     VLMConfig,
 )
+from utils.text import resolve_dict as _resolve_dict
 
 logger = logging.getLogger(__name__)
 
 _CONFIG_PATH = Path(__file__).resolve().parent.parent / "config.yaml"
-
-
-def _resolve_env_vars(value: str) -> str:
-    """将 ${VAR} 替换为环境变量值，缺失时保留原文"""
-    def _replace(match):
-        return os.environ.get(match.group(1), match.group(0))
-    return re.sub(r"\$\{(\w+)\}", _replace, value)
-
-
-def _resolve_dict(data: dict) -> dict:
-    """递归解析字典中所有字符串的环境变量"""
-    result = {}
-    for key, value in data.items():
-        if isinstance(value, str):
-            result[key] = _resolve_env_vars(value)
-        elif isinstance(value, dict):
-            result[key] = _resolve_dict(value)
-        elif isinstance(value, list):
-            result[key] = [_resolve_dict(v) if isinstance(v, dict) else v for v in value]
-        else:
-            result[key] = value
-    return result
 
 
 def load_global_config(
@@ -67,60 +45,66 @@ def load_global_config(
     with open(path, "r", encoding="utf-8") as f:
         raw = yaml.safe_load(f) or {}
 
-    raw = _resolve_dict(raw)
+    raw = _resolve_dict(raw, strict=False)
 
     # device
     device_raw = raw.get("device", {})
+    raw_type = device_raw.get("type", "adb")
     device_config = DeviceConfig(
-        device_type=device_raw.get("type", "adb"),
+        device_type=_map_device_type(raw_type),
         device_id=device_raw.get("id"),
     )
 
     config_raw = raw.get("config", {})
 
     # action_model
-    am = config_raw.get("action_model", {})
-    action_model_config = ActionModelConfig(
-        provider=am.get("provider", "autoglm"),
-        base_url=am.get("base_url", "${AUTOGLM_BASE_URL}"),
-        api_key=am.get("api_key", "${AUTOGLM_API_KEY}"),
-        model=am.get("model", "autoglm-phone"),
-        max_tokens=am.get("max_tokens", 3000),
-        temperature=am.get("temperature", 0.1),
-        lang=am.get("lang", "cn"),
-        custom_rules=am.get("custom_rules", []),
+    action_model_config = _config_from_dict(
+        ActionModelConfig, config_raw.get("action_model", {}),
     )
 
     # vlm
-    vm = config_raw.get("vlm", {})
-    vlm_config = VLMConfig(
-        provider=vm.get("provider", "gemini"),
-        base_url=vm.get("base_url", ""),
-        api_key=vm.get("api_key", "${GEMINI_API_KEY}"),
-        model=vm.get("model", "gemini-3-pro-image-preview"),
-        temperature=vm.get("temperature", 0.1),
-        max_tokens=vm.get("max_tokens", 1000),
+    vlm_config = _config_from_dict(
+        VLMConfig, config_raw.get("vlm", {}),
     )
 
-    # llm（Planner + Optimizer 共用）
-    lm = config_raw.get("llm", {})
-    llm_config = LLMConfig(
-        provider=lm.get("provider", "gemini"),
-        base_url=lm.get("base_url", ""),
-        api_key=lm.get("api_key", "${GEMINI_API_KEY}"),
-        model=lm.get("model", "gemini-3.1-pro-preview"),
-        temperature=lm.get("temperature", 0.3),
-        max_tokens=lm.get("max_tokens", 2000),
+    # llm
+    llm_config = _config_from_dict(
+        LLMConfig, config_raw.get("llm", {}),
     )
 
     # cache
-    ca = config_raw.get("cache", {})
-    cache_config = CacheConfig(
-        enabled=ca.get("enabled", True),
-        similarity_threshold=ca.get("similarity_threshold", 0.85),
-        region_similarity_threshold=ca.get("region_similarity_threshold", 0.8),
-        ttl_days=ca.get("ttl_days", 30),
-        db_path=ca.get("db_path", ".cache/action_cache.db"),
+    cache_config = _config_from_dict(
+        CacheConfig, config_raw.get("cache", {}),
     )
 
     return device_config, action_model_config, vlm_config, llm_config, cache_config
+
+
+def _config_from_dict(cls, raw: dict, defaults=None):
+    """从 dict 构造 dataclass 实例，仅取 dataclass 字段名对应的 key。
+
+    Args:
+        cls: dataclass 类
+        raw: 原始 dict
+        defaults: 可选的 fallback dataclass 实例（YAML > defaults > field default）
+    """
+    import dataclasses
+    kwargs = {}
+    for f in dataclasses.fields(cls):
+        if f.name in raw:
+            kwargs[f.name] = raw[f.name]
+        elif defaults is not None:
+            kwargs[f.name] = getattr(defaults, f.name)
+    return cls(**kwargs)
+
+
+def _map_device_type(device_type: str) -> str:
+    """映射用户友好的设备类型到内部值"""
+    mapping = {
+        "android": "adb",
+        "harmony": "hdc",
+        "ios": "ios",
+        "adb": "adb",
+        "hdc": "hdc",
+    }
+    return mapping.get(device_type, "adb")

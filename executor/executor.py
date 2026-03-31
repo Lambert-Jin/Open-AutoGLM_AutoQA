@@ -15,6 +15,7 @@ from executor.context_agent import ContextAgent
 from executor.model_protocol import ActionModel
 
 if TYPE_CHECKING:
+    from cache import ActionCache
     from describer import PageDescriber
     from optimizer import ActionOptimizer
 

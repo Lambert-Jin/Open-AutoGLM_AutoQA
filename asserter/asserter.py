@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import json
 import logging
-import re
 
 from asserter.prompts import ASSERT_SYSTEM_PROMPT
-from config.settings import AssertResult, Screenshot, VLMConfig
+from config.settings import AssertResult, VLMConfig
+from device.base import DeviceScreenshot
 from providers import create_provider
 from providers._utils import guess_mime_type
+from utils.text import strip_markdown_json
 
 logger = logging.getLogger(__name__)
 
@@ -27,11 +28,11 @@ class Asserter:
             max_tokens=vlm_config.max_tokens,
         )
 
-    def verify(self, screenshot: Screenshot, expectation: str) -> AssertResult:
+    def verify(self, screenshot: DeviceScreenshot, expectation: str) -> AssertResult:
         """对截图执行视觉断言，返回结构化结果"""
-        mime = guess_mime_type(screenshot.base64)
+        mime = guess_mime_type(screenshot.base64_data)
         messages = [{"role": "user", "content": [
-            {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{screenshot.base64}"}},
+            {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{screenshot.base64_data}"}},
             {"type": "text", "text": f"请判断以下期望是否成立：\n{expectation}"},
         ]}]
 
@@ -42,9 +43,7 @@ class Asserter:
 
     def _parse_response(self, raw: str) -> AssertResult:
         """解析 VLM 响应为 AssertResult，容忍 markdown 代码块包裹"""
-        # 去掉可能的 ```json ... ``` 包裹
-        cleaned = re.sub(r"^```(?:json)?\s*", "", raw.strip())
-        cleaned = re.sub(r"\s*```$", "", cleaned)
+        cleaned = strip_markdown_json(raw)
 
         try:
             data = json.loads(cleaned)

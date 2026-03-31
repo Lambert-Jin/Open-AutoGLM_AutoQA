@@ -5,8 +5,6 @@ from __future__ import annotations
 import base64
 import logging
 
-from providers._utils import guess_mime_type
-
 logger = logging.getLogger(__name__)
 
 

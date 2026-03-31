@@ -6,7 +6,7 @@ import base64
 import logging
 import os
 
-from config.settings import Screenshot
+from device.base import DeviceScreenshot
 from device import Device
 
 logger = logging.getLogger(__name__)
@@ -18,8 +18,8 @@ class ScreenshotManager:
     def __init__(self, device: Device | None = None):
         self._device = device
 
-    def capture(self, device: Device | None = None) -> Screenshot:
-        """从设备截图，返回 Screenshot 对象
+    def capture(self, device: Device | None = None) -> DeviceScreenshot:
+        """从设备截图，返回 DeviceScreenshot 对象
 
         Args:
             device: 可选，覆盖初始化时绑定的设备
@@ -30,24 +30,20 @@ class ScreenshotManager:
 
         ds = dev.screenshot()
         logger.debug("截图完成: %dx%d", ds.width, ds.height)
-        return Screenshot(
-            base64=ds.base64_data,
-            width=ds.width,
-            height=ds.height,
-        )
+        return ds
 
-    def from_file(self, path: str) -> Screenshot:
-        """从本地图片文件加载为 Screenshot"""
+    def from_file(self, path: str) -> DeviceScreenshot:
+        """从本地图片文件加载为 DeviceScreenshot"""
         with open(path, "rb") as f:
             img_b64 = base64.b64encode(f.read()).decode()
         width, height = self._get_image_size(img_b64)
-        return Screenshot(base64=img_b64, width=width, height=height)
+        return DeviceScreenshot(base64_data=img_b64, width=width, height=height)
 
-    def save(self, screenshot: Screenshot, path: str) -> str:
-        """将 Screenshot 保存为图片文件"""
+    def save(self, screenshot: DeviceScreenshot, path: str) -> str:
+        """将 DeviceScreenshot 保存为图片文件"""
         os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
         with open(path, "wb") as f:
-            f.write(base64.b64decode(screenshot.base64))
+            f.write(base64.b64decode(screenshot.base64_data))
         logger.debug("截图已保存: %s", path)
         return path
 

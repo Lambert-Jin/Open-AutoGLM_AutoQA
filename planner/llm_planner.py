@@ -4,13 +4,13 @@ from __future__ import annotations
 
 import json
 import logging
-import re
 
 import yaml
 
 from config.settings import LLMConfig
 from planner.prompts import PLANNER_SYSTEM_PROMPT
 from suite import ActionStep, AssertStep, Step, TestCase, TestSuite
+from utils.text import strip_markdown_json
 
 logger = logging.getLogger(__name__)
 
@@ -127,11 +127,7 @@ def _call_llm(system_prompt: str, user_prompt: str, config: LLMConfig) -> str:
 
 def _parse_plan_response(response: str) -> TestCase:
     """解析 LLM 返回的 JSON 为 TestCase"""
-    # 去除 markdown 代码块包裹
-    text = response.strip()
-    match = re.search(r"```(?:json)?\s*\n?(.*?)\n?```", text, re.DOTALL)
-    if match:
-        text = match.group(1).strip()
+    text = strip_markdown_json(response)
 
     try:
         data = json.loads(text)
