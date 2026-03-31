@@ -66,66 +66,23 @@ def run_test(args):
     """模式 1：执行 YAML 测试用例"""
     _setup_logging(args.verbose)
 
-    from device import DeviceType, create_device
-    from executor.models import create_action_model
-    from executor import TestExecutor
-    from asserter import Asserter
     from planner import parse_yaml
-    from runner import TestRunner
-    from screenshot import ScreenshotManager
     from config.loader import load_global_config
 
-    # 解析 YAML（包含 action_model / vlm / llm 三类模型配置）
     suite, device_config, model_config, vlm_config, llm_config = parse_yaml(args.yaml_path)
-
-    # 加载全局配置（用于 cache 等）
     _, _, _, _, cache_config = load_global_config()
 
-    # CLI 参数覆盖 YAML 配置
-    device_type_str = args.device_type or device_config.device_type
-    device_id = args.device_id or device_config.device_id
-
-    # 创建设备实例（不再是全局单例）
-    device = create_device(DeviceType(device_type_str), device_id)
-
-    # 创建模型适配器
-    action_model = create_action_model(
-        provider=model_config.provider,
-        base_url=model_config.base_url,
-        api_key=model_config.api_key,
-        model=model_config.model,
-        max_tokens=model_config.max_tokens,
-        temperature=model_config.temperature,
-        lang=model_config.lang,
-        custom_rules=model_config.custom_rules,
-    )
-
-    # 初始化 Action 缓存
     action_cache = None
     if cache_config.enabled and not args.no_cache:
         action_cache = _create_action_cache(cache_config)
 
-    # 初始化 PageDescriber（复用 VLM 配置）
-    from describer import PageDescriber
-    page_describer = PageDescriber(vlm_config) if vlm_config else None
-
-    # 初始化 ActionOptimizer（复用 LLM 配置）
-    from optimizer import ActionOptimizer
-    action_optimizer = ActionOptimizer(llm_config) if llm_config else None
-
-    # 组装
-    executor = TestExecutor(
-        model=action_model, device=device, action_cache=action_cache,
-        page_describer=page_describer, action_optimizer=action_optimizer,
+    runner, _, _ = _build_components(
+        device_config, model_config, vlm_config, llm_config,
+        device_type_override=args.device_type,
+        device_id_override=args.device_id,
+        action_cache=action_cache,
     )
-    asserter = Asserter(vlm_config)
-    screenshot_mgr = ScreenshotManager(device=device)
-
-    # 运行测试
-    runner = TestRunner(executor, asserter, screenshot_mgr)
     result = runner.run_suite(suite)
-
-    # 退出码
     sys.exit(0 if result.failed == 0 else 1)
 
 
@@ -142,6 +99,54 @@ def _create_action_cache(cache_config):
         region_similarity_threshold=cache_config.region_similarity_threshold,
         ttl_days=cache_config.ttl_days,
     )
+
+
+def _build_components(
+    device_config,
+    model_config,
+    vlm_config,
+    llm_config,
+    device_type_override: str | None = None,
+    device_id_override: str | None = None,
+    action_cache=None,
+):
+    """创建核心组件：device, executor, asserter, screenshot_mgr, runner"""
+    from device import DeviceType, create_device
+    from executor.models import create_action_model
+    from executor import TestExecutor
+    from asserter import Asserter
+    from runner import TestRunner
+    from screenshot import ScreenshotManager
+    from describer import PageDescriber
+    from optimizer import ActionOptimizer
+
+    device_type_str = device_type_override or device_config.device_type
+    device_id = device_id_override or device_config.device_id
+    device = create_device(DeviceType(device_type_str), device_id)
+
+    action_model = create_action_model(
+        provider=model_config.provider,
+        base_url=model_config.base_url,
+        api_key=model_config.api_key,
+        model=model_config.model,
+        max_tokens=model_config.max_tokens,
+        temperature=model_config.temperature,
+        lang=model_config.lang,
+        custom_rules=model_config.custom_rules,
+    )
+
+    page_describer = PageDescriber(vlm_config) if vlm_config else None
+    action_optimizer = ActionOptimizer(llm_config) if llm_config else None
+
+    executor = TestExecutor(
+        model=action_model, device=device, action_cache=action_cache,
+        page_describer=page_describer, action_optimizer=action_optimizer,
+    )
+    asserter = Asserter(vlm_config)
+    screenshot_mgr = ScreenshotManager(device=device)
+    runner = TestRunner(executor, asserter, screenshot_mgr)
+
+    return runner, executor, device
 
 
 def generate_test(args):
@@ -198,51 +203,17 @@ def interactive_test(args):
     """模式 3：交互式测试"""
     _setup_logging(args.verbose)
 
-    from device import DeviceType, create_device
-    from executor.models import create_action_model
-    from executor import TestExecutor
-    from asserter import Asserter
     from config.loader import load_global_config
     from planner import plan_test_case
-    from runner import TestRunner
-    from screenshot import ScreenshotManager
     from suite import TestSuite
 
-    # 使用全局配置（替代硬编码默认值）
     device_config, model_config, vlm_config, llm_config, _ = load_global_config()
 
-    # 创建设备实例（CLI 参数 > 全局配置）
-    device_type_str = args.device_type or device_config.device_type
-    device = create_device(DeviceType(device_type_str), args.device_id or device_config.device_id)
-
-    # 创建模型适配器
-    action_model = create_action_model(
-        provider=model_config.provider,
-        base_url=model_config.base_url,
-        api_key=model_config.api_key,
-        model=model_config.model,
-        max_tokens=model_config.max_tokens,
-        temperature=model_config.temperature,
-        lang=model_config.lang,
-        custom_rules=model_config.custom_rules,
+    runner, _, _ = _build_components(
+        device_config, model_config, vlm_config, llm_config,
+        device_type_override=args.device_type,
+        device_id_override=args.device_id,
     )
-
-    # 初始化 PageDescriber（复用 VLM 配置）
-    from describer import PageDescriber
-    page_describer = PageDescriber(vlm_config) if vlm_config else None
-
-    # 初始化 ActionOptimizer（复用 LLM 配置）
-    from optimizer import ActionOptimizer
-    action_optimizer = ActionOptimizer(llm_config) if llm_config else None
-
-    # 组装
-    executor = TestExecutor(
-        model=action_model, device=device,
-        page_describer=page_describer, action_optimizer=action_optimizer,
-    )
-    asserter = Asserter(vlm_config)
-    screenshot_mgr = ScreenshotManager(device=device)
-    runner = TestRunner(executor, asserter, screenshot_mgr)
 
     print("\n" + "=" * 60)
     print("  AutoQA 交互式测试模式")
