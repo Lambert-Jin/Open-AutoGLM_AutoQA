@@ -22,6 +22,7 @@ def main():
     run_parser.add_argument("--device-id", default=None, help="设备 ID")
     run_parser.add_argument("--no-cache", action="store_true", help="禁用 Action 缓存")
     run_parser.add_argument("--verbose", "-v", action="store_true", help="详细日志输出")
+    _add_monitor_args(run_parser)
 
     # generate 子命令
     gen_parser = subparsers.add_parser("generate", help="自然语言生成 YAML 测试用例")
@@ -35,6 +36,7 @@ def main():
     int_parser.add_argument("--device-type", default=None, help="设备类型: adb")
     int_parser.add_argument("--device-id", default=None, help="设备 ID")
     int_parser.add_argument("--verbose", "-v", action="store_true", help="详细日志输出")
+    _add_monitor_args(int_parser)
 
     args = parser.parse_args()
 
@@ -58,7 +60,7 @@ def _setup_logging(verbose: bool):
         datefmt="%H:%M:%S",
     )
     level = logging.DEBUG if verbose else logging.INFO
-    for module in ("executor", "runner", "asserter", "planner", "screenshot", "config", "device", "cache", "describer", "optimizer"):
+    for module in ("executor", "runner", "asserter", "planner", "screenshot", "config", "device", "cache", "describer", "optimizer", "monitor"):
         logging.getLogger(module).setLevel(level)
 
 
@@ -71,18 +73,28 @@ def run_test(args):
 
     suite, device_config, model_config, vlm_config, llm_config = parse_yaml(args.yaml_path)
     _, _, _, _, cache_config = load_global_config()
+    monitor_config = _build_monitor_config(args)
 
     action_cache = None
     if cache_config.enabled and not args.no_cache:
         action_cache = _create_action_cache(cache_config)
 
-    runner, _, _ = _build_components(
+    runner, _, _, monitor = _build_components(
         device_config, model_config, vlm_config, llm_config,
         device_type_override=args.device_type,
         device_id_override=args.device_id,
         action_cache=action_cache,
+        monitor_config=monitor_config,
     )
-    result = runner.run_suite(suite)
+    try:
+        if monitor:
+            monitor.start()
+            if monitor.url:
+                print(f"监控页: {monitor.url}")
+        result = runner.run_suite(suite)
+    finally:
+        if monitor:
+            monitor.stop()
     sys.exit(0 if result.failed == 0 else 1)
 
 
@@ -109,6 +121,7 @@ def _build_components(
     device_type_override: str | None = None,
     device_id_override: str | None = None,
     action_cache=None,
+    monitor_config=None,
 ):
     """创建核心组件：device, executor, asserter, screenshot_mgr, runner"""
     from device import DeviceType, create_device
@@ -119,6 +132,7 @@ def _build_components(
     from screenshot import ScreenshotManager
     from describer import PageDescriber
     from optimizer import ActionOptimizer
+    from monitor import MonitorRuntime
 
     device_type_str = device_type_override or device_config.device_type
     device_id = device_id_override or device_config.device_id
@@ -137,16 +151,18 @@ def _build_components(
 
     page_describer = PageDescriber(vlm_config) if vlm_config else None
     action_optimizer = ActionOptimizer(llm_config) if llm_config else None
+    monitor = MonitorRuntime(monitor_config, device_id=device.device_id) if monitor_config and monitor_config.enabled else None
 
     executor = TestExecutor(
         model=action_model, device=device, action_cache=action_cache,
         page_describer=page_describer, action_optimizer=action_optimizer,
+        monitor=monitor,
     )
     asserter = Asserter(vlm_config)
     screenshot_mgr = ScreenshotManager(device=device)
-    runner = TestRunner(executor, asserter, screenshot_mgr)
+    runner = TestRunner(executor, asserter, screenshot_mgr, monitor=monitor)
 
-    return runner, executor, device
+    return runner, executor, device, monitor
 
 
 def generate_test(args):
@@ -208,12 +224,18 @@ def interactive_test(args):
     from suite import TestSuite
 
     device_config, model_config, vlm_config, llm_config, _ = load_global_config()
+    monitor_config = _build_monitor_config(args)
 
-    runner, _, _ = _build_components(
+    runner, _, _, monitor = _build_components(
         device_config, model_config, vlm_config, llm_config,
         device_type_override=args.device_type,
         device_id_override=args.device_id,
+        monitor_config=monitor_config,
     )
+    if monitor:
+        monitor.start()
+        if monitor.url:
+            print(f"监控页: {monitor.url}")
 
     print("\n" + "=" * 60)
     print("  AutoQA 交互式测试模式")
@@ -266,6 +288,9 @@ def interactive_test(args):
         else:
             print(f"\n{result.failed}/{result.total} 个步骤失败")
 
+    if monitor:
+        monitor.stop()
+
 
 def _print_steps_preview(test_case):
     """打印步骤预览"""
@@ -278,6 +303,37 @@ def _print_steps_preview(test_case):
         elif isinstance(step, AssertStep):
             sev = f" ({step.severity})" if step.severity != "critical" else ""
             print(f"    {i}. [断言] {step.expectation}{sev}")
+
+
+def _add_monitor_args(parser):
+    parser.add_argument("--live-monitor", action="store_true", help="启动本地监控页（scrcpy + 事件时间线）")
+    parser.add_argument("--monitor-host", default="127.0.0.1", help="监控页监听地址")
+    parser.add_argument("--monitor-port", type=int, default=8765, help="监控页端口")
+    parser.add_argument("--artifact-dir", default=".artifacts/monitor", help="监控截图与产物目录")
+    parser.add_argument("--scrcpy-path", default=None, help="scrcpy 可执行文件路径")
+    parser.add_argument("--scrcpy-max-fps", type=int, default=15, help="scrcpy 最大帧率")
+    parser.add_argument("--scrcpy-bit-rate", default="6M", help="scrcpy 视频码率，如 6M")
+    parser.add_argument("--scrcpy-max-size", type=int, default=1080, help="scrcpy 最大边长，0 表示不限制")
+    parser.add_argument("--show-input-text", action="store_true", help="监控图中显示输入文本原文（默认脱敏）")
+
+
+def _build_monitor_config(args):
+    if not getattr(args, "live_monitor", False):
+        return None
+
+    from monitor import MonitorConfig
+
+    return MonitorConfig(
+        enabled=True,
+        host=args.monitor_host,
+        port=args.monitor_port,
+        artifact_dir=args.artifact_dir,
+        scrcpy_path=args.scrcpy_path,
+        scrcpy_max_fps=args.scrcpy_max_fps,
+        scrcpy_video_bit_rate=args.scrcpy_bit_rate,
+        scrcpy_max_size=args.scrcpy_max_size,
+        mask_input_text=not args.show_input_text,
+    )
 
 
 if __name__ == "__main__":

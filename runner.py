@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 import logging
+from datetime import datetime
 
 from asserter import Asserter
 from config.settings import AssertResult
 from executor import ExecutorActionResult, TestExecutor
+from monitor import NoopMonitorGateway
 from screenshot import ScreenshotManager
 from suite import (
     ActionStep,
@@ -30,13 +32,17 @@ class TestRunner:
         executor: TestExecutor,
         asserter: Asserter,
         screenshot_mgr: ScreenshotManager | None = None,
+        monitor=None,
     ):
         self.executor = executor
         self.asserter = asserter
         self.screenshot_mgr = screenshot_mgr or ScreenshotManager(device=executor.device)
+        self.monitor = monitor or NoopMonitorGateway()
 
     def run_suite(self, suite: TestSuite) -> TestSuiteResult:
         """运行整个测试套件"""
+        run_id = datetime.now().strftime("%Y%m%d_%H%M%S")
+        self.monitor.on_run_start(run_id, suite.name)
         print(f"\n{'='*60}")
         print(f"  测试套件: {suite.name}")
         print(f"  用例数量: {len(suite.test_cases)}")
@@ -49,26 +55,34 @@ class TestRunner:
                 self._cleanup_device()
 
             print(f"── 用例 {i}/{len(suite.test_cases)}: {test_case.name} ──\n")
-            result = self.run_case(test_case)
+            self.monitor.on_case_start(run_id, i, test_case.name)
+            result = self.run_case(test_case, run_id=run_id, case_index=i)
             cases.append(result)
+            self.monitor.on_case_end(run_id, i, test_case.name, result.status == "passed")
             self._print_case_summary(result)
 
         suite_result = TestSuiteResult(suite_name=suite.name, cases=cases)
+        self.monitor.on_run_end(run_id, suite_result.failed == 0)
         self._print_suite_summary(suite_result)
         return suite_result
 
-    def run_case(self, case: TestCase) -> TestCaseResult:
+    def run_case(self, case: TestCase, run_id: str = "", case_index: int = 0) -> TestCaseResult:
         """运行单个测试用例"""
         self.executor.reset()
 
         step_results: list[StepResult] = []
 
         for i, step in enumerate(case.steps, 1):
+            step_type = "action" if isinstance(step, ActionStep) else "assert"
+            step_title = step.description if isinstance(step, ActionStep) else step.expectation
+            self.monitor.on_step_start(run_id, case_index, i, step_type, step_title)
             if isinstance(step, ActionStep):
                 next_action = self._peek_next_action(case.steps, i)
                 result = self._run_action(
                     step, i,
                     next_instruction=next_action.description if next_action else None,
+                    run_id=run_id,
+                    case_index=case_index,
                 )
             elif isinstance(step, AssertStep):
                 result = self._run_assert(step, i)
@@ -76,6 +90,15 @@ class TestRunner:
                 continue
 
             step_results.append(result)
+            self.monitor.on_step_end(
+                run_id,
+                case_index,
+                i,
+                step_type,
+                step_title,
+                result.success,
+                message=self._step_message(result),
+            )
 
             if not result.success and not case.continue_on_error:
                 logger.info("步骤失败且 continueOnError=False，中断后续步骤")
@@ -84,7 +107,15 @@ class TestRunner:
         status = "passed" if all(r.success for r in step_results) else "failed"
         return TestCaseResult(case_name=case.name, steps=step_results, status=status)
 
-    def _run_action(self, step: ActionStep, step_num: int, next_instruction: str | None = None) -> StepResult:
+    def _run_action(
+        self,
+        step: ActionStep,
+        step_num: int,
+        next_instruction: str | None = None,
+        *,
+        run_id: str = "",
+        case_index: int = 0,
+    ) -> StepResult:
         """执行操作步骤"""
         timing = Timing.start_now()
 
@@ -93,6 +124,9 @@ class TestRunner:
         result: ExecutorActionResult = self.executor.execute_action(
             step.description, cache_key=step.cache_key,
             next_instruction=next_instruction,
+            run_id=run_id,
+            case_index=case_index,
+            step_index=step_num,
         )
 
         timing.stop()
@@ -168,6 +202,17 @@ class TestRunner:
         except Exception as e:
             print(f"WARN ({e})")
             logger.warning("设备清理失败: %s", e)
+
+    @staticmethod
+    def _step_message(result: StepResult) -> str | None:
+        detail = result.detail
+        if detail is None:
+            return None
+        if hasattr(detail, "error") and detail.error:
+            return detail.error
+        if hasattr(detail, "reason") and detail.reason:
+            return detail.reason
+        return None
 
     @staticmethod
     def _print_case_summary(result: TestCaseResult):

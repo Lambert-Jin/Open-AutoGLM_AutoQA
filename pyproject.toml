@@ -8,10 +8,11 @@ dependencies = [
     "google-genai>=1.0",
     "pyyaml>=6.0",
     "Pillow>=10.0",
+    "av>=12.0",
 ]
 
 [tool.setuptools.packages.find]
-include = ["asserter*", "config*", "executor*", "planner*", "screenshot*"]
+include = ["asserter*", "config*", "executor*", "planner*", "screenshot*", "monitor*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

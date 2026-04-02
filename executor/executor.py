@@ -13,10 +13,12 @@ from executor.actions import ActionType, UnifiedAction
 from executor.action_executor import ActionExecutor, ActionExecuteResult as _AER
 from executor.context_agent import ContextAgent
 from executor.model_protocol import ActionModel
+from monitor import ActionTraceContext, NoopMonitorGateway
 
 if TYPE_CHECKING:
     from cache import ActionCache
     from describer import PageDescriber
+    from monitor import MonitorGateway
     from optimizer import ActionOptimizer
 
 logger = logging.getLogger(__name__)
@@ -51,9 +53,10 @@ class TestExecutor:
         device: Device,
         max_steps_per_action: int = 20,
         action_cache: ActionCache | None = None,
-        post_action_delay: float = 1.0,
+        post_action_delay: float = 2.0,
         page_describer: PageDescriber | None = None,
         action_optimizer: ActionOptimizer | None = None,
+        monitor: MonitorGateway | None = None,
     ):
         self.model = model
         self.device = device
@@ -64,6 +67,7 @@ class TestExecutor:
         self.post_action_delay = post_action_delay  # 动作执行后等待页面加载的延迟（秒）
         self.page_describer = page_describer
         self.action_optimizer = action_optimizer
+        self.monitor = monitor or NoopMonitorGateway()
         self._system_prompt: str = ""  # 缓存 system prompt，避免重复获取
 
         # 异步上下文子代理：describe + record + precompute optimize 在后台并行
@@ -76,6 +80,9 @@ class TestExecutor:
         description: str,
         cache_key: str = "",
         next_instruction: str | None = None,
+        run_id: str = "",
+        case_index: int = 0,
+        step_index: int = 0,
     ) -> ExecutorActionResult:
         """
         执行一个语义级操作步骤。
@@ -112,6 +119,8 @@ class TestExecutor:
                 description = precomputed
                 logger.info("指令优化: 使用预计算结果")
             else:
+                if self._context_agent:
+                    self._context_agent.drain()  # 确保上一步 record 已写入 history
                 description = self.action_optimizer.optimize(description)
                 if self._context_agent:
                     logger.info("指令优化: 同步降级（无预计算）")
@@ -137,8 +146,23 @@ class TestExecutor:
                     end_x=abs_end_x,
                     end_y=abs_end_y,
                 )
+                cache_trace = self._build_trace_context(
+                    run_id, case_index, step_index, 1, original_description, from_cache=True,
+                )
+                self.monitor.on_action_before(cache_trace, cache_action, screenshot)
                 cache_result = self.action_executor.execute(cache_action)
+                cache_after = screenshot
                 if cache_result.success:
+                    if self.post_action_delay > 0:
+                        time.sleep(self.post_action_delay)
+                    try:
+                        cache_after = self.device.screenshot()
+                    except ScreenshotSensitiveError:
+                        cache_after = screenshot
+                    self.monitor.on_action_after(
+                        cache_trace, cache_action, cache_after,
+                        success=True, message=cache_result.message,
+                    )
                     self.action_cache.record_hit(cached.entry)
                     if self._context_agent:
                         self._context_agent.submit(screenshot, original_description, next_instruction)
@@ -147,6 +171,10 @@ class TestExecutor:
                         actions_taken=[{"type": params["action_type"], "x": params["x"], "y": params["y"]}],
                         rounds=0,
                     )
+                self.monitor.on_action_after(
+                    cache_trace, cache_action, cache_after,
+                    success=False, message=cache_result.message,
+                )
                 logger.warning("缓存动作执行失败，fallback 到正常流程")
             else:
                 logger.info("缓存未命中: %s (app=%s, activity=%s)", cache_key, current_app, activity)
@@ -207,6 +235,10 @@ class TestExecutor:
                 return exec_result
 
             # 执行动作
+            trace = self._build_trace_context(
+                run_id, case_index, step_index, round_num + 1, original_description,
+            )
+            self.monitor.on_action_before(trace, action, screenshot)
             result = self.action_executor.execute(action)
             actions_taken.append({
                 "type": action.type.value,
@@ -215,6 +247,9 @@ class TestExecutor:
             })
 
             if result.should_finish:
+                self.monitor.on_action_after(
+                    trace, action, screenshot, success=result.success, message=result.message,
+                )
                 exec_result = ExecutorActionResult(
                     success=result.success, actions_taken=actions_taken,
                     rounds=round_num + 1, error=result.message,
@@ -233,6 +268,9 @@ class TestExecutor:
             try:
                 screenshot = self.device.screenshot()
             except ScreenshotSensitiveError:
+                self.monitor.on_action_after(
+                    trace, action, screenshot, success=result.success, message=result.message,
+                )
                 # 敏感屏幕（支付/安全页面）：使用上次的截图尺寸，不发图片
                 current_app = self.device.current_app()
                 screen_info = self.model.build_screen_info(current_app)
@@ -244,6 +282,9 @@ class TestExecutor:
                 )
                 continue
 
+            self.monitor.on_action_after(
+                trace, action, screenshot, success=result.success, message=result.message,
+            )
             current_app = self.device.current_app()
             screen_info = self.model.build_screen_info(current_app)
 
@@ -281,6 +322,28 @@ class TestExecutor:
         if self.action_optimizer:
             self.action_optimizer.reset()
         logger.debug("Executor 已重置")
+
+    @staticmethod
+    def _build_trace_context(
+        run_id: str,
+        case_index: int,
+        step_index: int,
+        round_index: int,
+        step_description: str,
+        *,
+        from_cache: bool = False,
+    ) -> ActionTraceContext:
+        safe_run_id = run_id or "adhoc"
+        action_id = f"a_{case_index:02d}_{step_index:02d}_{round_index:02d}"
+        return ActionTraceContext(
+            run_id=safe_run_id,
+            case_index=case_index,
+            step_index=step_index,
+            round_index=round_index,
+            step_description=step_description,
+            action_id=action_id,
+            from_cache=from_cache,
+        )
 
     def _maybe_cache_action(
         self,
