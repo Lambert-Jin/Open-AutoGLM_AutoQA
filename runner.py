@@ -21,7 +21,7 @@ from suite import (
     Timing,
 )
 
-logger = logging.getLogger(__name__)
+log_runner = logging.getLogger("autoqa:runner")
 
 
 class TestRunner:
@@ -101,7 +101,7 @@ class TestRunner:
             )
 
             if not result.success and not case.continue_on_error:
-                logger.info("步骤失败且 continueOnError=False，中断后续步骤")
+                log_runner.info("步骤失败且 continueOnError=False，中断后续步骤")
                 break
 
         status = "passed" if all(r.success for r in step_results) else "failed"
@@ -157,7 +157,7 @@ class TestRunner:
         # 容错：断言失败 → 清理环境 → 重试
         if not result.passed and step.retry_on_fail:
             print(f"RETRY ", end="", flush=True)
-            logger.info("断言失败，尝试清理后重试: %s", step.retry_cleanup)
+            log_runner.info("断言失败，尝试清理后重试: %s", step.retry_cleanup)
 
             self.executor.handle_unexpected(step.retry_cleanup)
 
@@ -201,7 +201,7 @@ class TestRunner:
             print("OK")
         except Exception as e:
             print(f"WARN ({e})")
-            logger.warning("设备清理失败: %s", e)
+            log_runner.warning("设备清理失败: %s", e)
 
     @staticmethod
     def _step_message(result: StepResult) -> str | None:

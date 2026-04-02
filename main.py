@@ -53,15 +53,21 @@ def main():
 
 
 def _setup_logging(verbose: bool):
-    """配置日志：只对项目模块开 DEBUG，第三方库保持 WARNING"""
+    """配置日志：topic 化输出，类似 midscene 风格"""
     logging.basicConfig(
         level=logging.WARNING,
-        format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
+        format="  %(name)s %(message)s",
         datefmt="%H:%M:%S",
     )
     level = logging.DEBUG if verbose else logging.INFO
-    for module in ("executor", "runner", "asserter", "planner", "screenshot", "config", "device", "cache", "describer", "optimizer", "monitor"):
+    # 项目模块
+    for module in ("executor", "runner", "asserter", "planner", "screenshot", "config", "device", "cache", "monitor"):
         logging.getLogger(module).setLevel(level)
+    # topic loggers
+    for topic in ("autoqa:ai:call", "autoqa:ai:stats", "autoqa:executor", "autoqa:cache", "autoqa:action", "autoqa:runner"):
+        logging.getLogger(topic).setLevel(level)
+    # scrcpy 后台线程日志始终静默，避免打断交互输入
+    logging.getLogger("autoqa:scrcpy").setLevel(logging.WARNING)
 
 
 def run_test(args):
@@ -130,8 +136,6 @@ def _build_components(
     from asserter import Asserter
     from runner import TestRunner
     from screenshot import ScreenshotManager
-    from describer import PageDescriber
-    from optimizer import ActionOptimizer
     from monitor import MonitorRuntime
 
     device_type_str = device_type_override or device_config.device_type
@@ -149,13 +153,10 @@ def _build_components(
         custom_rules=model_config.custom_rules,
     )
 
-    page_describer = PageDescriber(vlm_config) if vlm_config else None
-    action_optimizer = ActionOptimizer(llm_config) if llm_config else None
     monitor = MonitorRuntime(monitor_config, device_id=device.device_id) if monitor_config and monitor_config.enabled else None
 
     executor = TestExecutor(
         model=action_model, device=device, action_cache=action_cache,
-        page_describer=page_describer, action_optimizer=action_optimizer,
         monitor=monitor,
     )
     asserter = Asserter(vlm_config)

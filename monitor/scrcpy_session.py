@@ -1,7 +1,9 @@
-"""scrcpy 录屏会话管理"""
+"""scrcpy 录屏会话管理 — FIFO 流式解码，实时视频流"""
 
 from __future__ import annotations
 
+import logging
+import os
 import shutil
 import subprocess
 import threading
@@ -12,12 +14,11 @@ from typing import Callable
 from monitor.frame_hub import FrameHub
 from monitor.models import MonitorConfig
 
-# import logging
-# logger = logging.getLogger(__name__)
+log = logging.getLogger("autoqa:scrcpy")
 
 
 class ScrcpySession:
-    """通过 scrcpy 录制到 MKV，并从录制文件解出最新帧"""
+    """通过 scrcpy 录制到 FIFO 管道，流式解码实时帧"""
 
     def __init__(
         self,
@@ -52,8 +53,10 @@ class ScrcpySession:
         if not scrcpy_path:
             raise RuntimeError("未找到 scrcpy，可通过 --scrcpy-path 指定")
 
-        if self._record_path.exists():
+        # 清理旧文件，创建 FIFO 管道
+        if self._record_path.exists() or self._record_path.is_fifo():
             self._record_path.unlink()
+        os.mkfifo(str(self._record_path))
 
         cmd = [
             scrcpy_path,
@@ -76,9 +79,15 @@ class ScrcpySession:
         if self._device_id:
             cmd += ["--serial", self._device_id]
 
-        # logger.info("启动 scrcpy: %s", " ".join(cmd))
+        log.info("启动: %s", " ".join(cmd))
         self._notify("starting", "scrcpy 会话启动中")
         self._stop_event.clear()
+
+        # 先启动解码线程（它会阻塞在 FIFO open 上等待写端）
+        self._decode_thread = threading.Thread(target=self._decode_loop, name="scrcpy-decode", daemon=True)
+        self._decode_thread.start()
+
+        # 再启动 scrcpy 进程（它打开 FIFO 写端，解码线程解除阻塞）
         self._process = subprocess.Popen(
             cmd,
             stdout=subprocess.PIPE,
@@ -88,8 +97,6 @@ class ScrcpySession:
         )
         self._log_thread = threading.Thread(target=self._log_loop, name="scrcpy-log", daemon=True)
         self._log_thread.start()
-        self._decode_thread = threading.Thread(target=self._decode_loop, name="scrcpy-decode", daemon=True)
-        self._decode_thread.start()
 
     def stop(self) -> None:
         self._stop_event.set()
@@ -102,6 +109,12 @@ class ScrcpySession:
                 process.kill()
                 process.wait(timeout=5)
         self._process = None
+        # 清理 FIFO
+        try:
+            if self._record_path.exists():
+                self._record_path.unlink()
+        except OSError:
+            pass
         self._notify("stopped", "scrcpy 会话已停止")
 
     def is_running(self) -> bool:
@@ -117,7 +130,7 @@ class ScrcpySession:
             line = raw_line.strip()
             if not line:
                 continue
-            # logger.info("[scrcpy] %s", line)
+            log.debug("[scrcpy] %s", line)
             lower = line.lower()
             if "error" in lower or "failed" in lower:
                 self._notify("error", line)
@@ -135,30 +148,45 @@ class ScrcpySession:
             self._notify("degraded", "未安装 PyAV，监控页将使用动作截图兜底刷新")
             return
 
-        last_size = -1
-        while not self._stop_event.is_set():
-            if self._record_path.exists():
-                try:
-                    current_size = self._record_path.stat().st_size
-                except FileNotFoundError:
-                    current_size = 0
-                if current_size > 0 and current_size != last_size:
-                    try:
-                        with av.open(str(self._record_path)) as container:
-                            frame = None
-                            for decoded in container.decode(video=0):
-                                frame = decoded
-                            if frame is not None:
-                                self._frame_hub.publish_image(frame.to_image(), source="scrcpy")
-                                last_size = current_size
-                    except Exception as e:
-                        # logger.debug("scrcpy 帧解码失败，稍后重试: %s", e)
-                        pass
+        self._notify("starting", "等待 scrcpy 视频流...")
 
-            process = self._process
-            if process and process.poll() is not None and not self._record_path.exists():
-                break
-            time.sleep(self._config.scrcpy_poll_interval)
+        try:
+            # av.open 会阻塞直到 FIFO 写端被 scrcpy 打开
+            container = av.open(str(self._record_path), format="matroska")
+        except Exception as e:
+            if not self._stop_event.is_set():
+                self._notify("error", f"无法打开视频流: {e}")
+            return
+
+        self._notify("running", "视频流已连接，开始实时解码")
+        log.info("FIFO 流式解码启动")
+
+        frame_count = 0
+        fps_limit = self._config.scrcpy_max_fps
+        min_interval = 1.0 / fps_limit if fps_limit > 0 else 0
+        last_publish = 0.0
+
+        try:
+            for frame in container.decode(video=0):
+                if self._stop_event.is_set():
+                    break
+
+                # 限帧：跳过多余帧，避免推送速度超过浏览器消费速度
+                now = time.monotonic()
+                if now - last_publish < min_interval:
+                    continue
+
+                self._frame_hub.publish_image(frame.to_image(), source="scrcpy")
+                last_publish = now
+                frame_count += 1
+        except av.error.EOFError:
+            log.info("视频流结束 (EOF)")
+        except Exception as e:
+            if not self._stop_event.is_set():
+                log.warning("解码异常: %s", e)
+        finally:
+            container.close()
+            log.info("解码结束，共处理 %d 帧", frame_count)
 
     def _notify(self, status: str, message: str | None) -> None:
         if self._status_callback:

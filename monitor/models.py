@@ -19,11 +19,11 @@ class MonitorConfig:
     port: int = 8765
     artifact_dir: str = ".artifacts/monitor"
     scrcpy_path: str | None = None
-    scrcpy_max_fps: int = 15
+    scrcpy_max_fps: int = 30
     scrcpy_video_bit_rate: str = "6M"
     scrcpy_max_size: int = 1080
     scrcpy_record_format: str = "mkv"
-    scrcpy_poll_interval: float = 0.4
+    scrcpy_poll_interval: float = 0.1
     event_buffer_size: int = 1000
     mask_input_text: bool = True
 

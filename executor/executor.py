@@ -11,17 +11,20 @@ from device import Device
 from device.errors import ScreenshotSensitiveError
 from executor.actions import ActionType, UnifiedAction
 from executor.action_executor import ActionExecutor, ActionExecuteResult as _AER
-from executor.context_agent import ContextAgent
 from executor.model_protocol import ActionModel
 from monitor import ActionTraceContext, NoopMonitorGateway
 
 if TYPE_CHECKING:
     from cache import ActionCache
-    from describer import PageDescriber
     from monitor import MonitorGateway
-    from optimizer import ActionOptimizer
 
 logger = logging.getLogger(__name__)
+
+# topic loggers (midscene 风格)
+log_ai_call = logging.getLogger("autoqa:ai:call")        # 模型请求/响应
+log_ai_stats = logging.getLogger("autoqa:ai:stats")      # token/耗时统计
+log_executor = logging.getLogger("autoqa:executor")       # 执行流程
+log_cache = logging.getLogger("autoqa:cache")             # 缓存命中/写入
 
 
 @dataclass
@@ -37,12 +40,9 @@ class TestExecutor:
     """
     测试执行器。
 
-    上下文策略：步骤级隔离 + ActionOptimizer 跨步骤指令优化
+    上下文策略：步骤级隔离，直接发送原始指令 + 截图给 AutoGLM
     - 每个 execute_action() 调用独立维护上下文（system prompt + 当前步骤对话）
     - 步骤间不共享完整历史，避免前序步骤的残留信息误导模型
-    - 通过 PageDescriber（VLM）分析每步截图提取页面关键信息
-    - 通过 ActionOptimizer（LLM）根据累积的历史步骤改写当前指令，使其更具体
-    - AutoGLM 收到优化后的指令 + 当前截图
     """
 
     MAX_ROUNDS_PER_STEP = 15  # 单步骤内最多对话轮次
@@ -54,8 +54,6 @@ class TestExecutor:
         max_steps_per_action: int = 20,
         action_cache: ActionCache | None = None,
         post_action_delay: float = 2.0,
-        page_describer: PageDescriber | None = None,
-        action_optimizer: ActionOptimizer | None = None,
         monitor: MonitorGateway | None = None,
     ):
         self.model = model
@@ -65,15 +63,8 @@ class TestExecutor:
         self.max_steps = max_steps_per_action
         self.action_cache = action_cache
         self.post_action_delay = post_action_delay  # 动作执行后等待页面加载的延迟（秒）
-        self.page_describer = page_describer
-        self.action_optimizer = action_optimizer
         self.monitor = monitor or NoopMonitorGateway()
         self._system_prompt: str = ""  # 缓存 system prompt，避免重复获取
-
-        # 异步上下文子代理：describe + record + precompute optimize 在后台并行
-        self._context_agent: ContextAgent | None = None
-        if self.page_describer or self.action_optimizer:
-            self._context_agent = ContextAgent(self.page_describer, self.action_optimizer)
 
     def execute_action(
         self,
@@ -89,9 +80,6 @@ class TestExecutor:
 
         内部多轮循环直到模型返回 finish 或达到 max_steps。
         每次调用创建独立上下文，步骤间互不干扰。
-
-        Args:
-            next_instruction: 下一步指令，用于 ContextAgent 预计算优化
         """
         actions_taken: list[dict] = []
         verbose = logger.isEnabledFor(logging.DEBUG)
@@ -104,26 +92,9 @@ class TestExecutor:
             {"role": "system", "content": self._system_prompt},
         ]
 
-        # ── 取预计算结果（上一步 ContextAgent 预计算的优化指令）──
-        precomputed = None
-        if self._context_agent:
-            precomputed = self._context_agent.take_precomputed()
-
         # 截图 + 构造消息
         screenshot = self.device.screenshot()
         current_app = self.device.current_app()
-
-        # ── 指令优化：优先用预计算结果，否则同步降级 ──
-        if self.action_optimizer:
-            if precomputed is not None:
-                description = precomputed
-                logger.info("指令优化: 使用预计算结果")
-            else:
-                if self._context_agent:
-                    self._context_agent.drain()  # 确保上一步 record 已写入 history
-                description = self.action_optimizer.optimize(description)
-                if self._context_agent:
-                    logger.info("指令优化: 同步降级（无预计算）")
 
         # ── 缓存快速路径 ──
         if cache_key and self.action_cache:
@@ -132,7 +103,7 @@ class TestExecutor:
                 cache_key, current_app, activity, screenshot,
             )
             if cached:
-                logger.info("缓存命中: %s (相似度 %.2f)", cache_key, cached.similarity)
+                log_cache.info("命中: %s (相似度 %.2f)", cache_key, cached.similarity)
                 params = cached.to_action_params()
                 # 归一化坐标 (0-999) → 绝对像素
                 sw, sh = screenshot.width, screenshot.height
@@ -164,8 +135,6 @@ class TestExecutor:
                         success=True, message=cache_result.message,
                     )
                     self.action_cache.record_hit(cached.entry)
-                    if self._context_agent:
-                        self._context_agent.submit(screenshot, original_description, next_instruction)
                     return ExecutorActionResult(
                         success=True,
                         actions_taken=[{"type": params["action_type"], "x": params["x"], "y": params["y"]}],
@@ -175,16 +144,11 @@ class TestExecutor:
                     cache_trace, cache_action, cache_after,
                     success=False, message=cache_result.message,
                 )
-                logger.warning("缓存动作执行失败，fallback 到正常流程")
+                log_cache.warning("动作执行失败，fallback 到正常流程")
             else:
-                logger.info("缓存未命中: %s (app=%s, activity=%s)", cache_key, current_app, activity)
+                log_cache.info("未命中: %s (app=%s, activity=%s)", cache_key, current_app, activity)
         initial_screenshot = screenshot  # 缓存写回用
         screen_info = self.model.build_screen_info(current_app)
-
-        # ── 提交给 ContextAgent（AutoGLM 之前！与 AutoGLM 并行执行）──
-        if self._context_agent:
-            self._context_agent.submit(screenshot, original_description, next_instruction)
-            logger.info("ContextAgent: 已提交，开始与 AutoGLM 并行")
 
         context.append(
             self.model.build_user_message(
@@ -200,14 +164,23 @@ class TestExecutor:
                 self._log_request(context, round_num + 1)
 
             # 调用模型
+            log_ai_call.info("sending request to %s (round %d)", self.model.__class__.__name__, round_num + 1)
             try:
                 output = self.model.call(context)
             except Exception as e:
-                logger.error("模型调用失败: %s", e)
+                log_ai_call.error("调用失败: %s", e)
                 return ExecutorActionResult(
                     success=False, actions_taken=actions_taken,
                     rounds=round_num + 1, error=f"Model error: {e}",
                 )
+
+            # 耗时统计
+            log_ai_stats.info(
+                "round %d, ttft %.2fs, total %.2fs",
+                round_num + 1,
+                output.time_to_first_token or 0,
+                output.total_time or 0,
+            )
 
             # 解析为 UnifiedAction
             action = self.model.parse(output, screenshot.width, screenshot.height)
@@ -223,7 +196,7 @@ class TestExecutor:
 
             # finish → 步骤完成
             if action.is_finish:
-                logger.info("步骤完成: %s (共 %d 轮)", original_description, round_num + 1)
+                log_executor.info("步骤完成: %s (共 %d 轮)", original_description, round_num + 1)
                 exec_result = ExecutorActionResult(
                     success=True, actions_taken=actions_taken,
                     rounds=round_num + 1,
@@ -316,12 +289,8 @@ class TestExecutor:
 
     def reset(self):
         """重置状态（切换 TestCase 时调用）"""
-        if self._context_agent:
-            self._context_agent.reset()
         self._system_prompt = ""
-        if self.action_optimizer:
-            self.action_optimizer.reset()
-        logger.debug("Executor 已重置")
+        log_executor.debug("已重置")
 
     @staticmethod
     def _build_trace_context(
@@ -386,34 +355,42 @@ class TestExecutor:
                 end_y=end_y_norm,
                 screenshot=screenshot,
             )
-            logger.info("已写入缓存: %s (action=%s, x=%d, y=%d, app=%s, activity=%s)",
-                        cache_key, first["type"], x_norm, y_norm, app, activity)
+            log_cache.info("写入: %s (action=%s, x=%d, y=%d, app=%s, activity=%s)",
+                          cache_key, first["type"], x_norm, y_norm, app, activity)
         except Exception as e:
-            logger.warning("缓存写入失败: %s", e)
+            log_cache.warning("写入失败: %s", e)
 
     @staticmethod
     def _log_request(context: list[dict], round_num: int):
-        last_user = next(
-            (m for m in reversed(context) if m.get("role") == "user"), None
-        )
-        if not last_user:
-            return
-        content = last_user.get("content", "")
-        if isinstance(content, list):
-            text = "\n".join(c.get("text", "") for c in content if c.get("type") == "text")
-            has_image = any(c.get("type") == "image_url" for c in content)
-        else:
-            text = str(content)
-            has_image = False
-        image_tag = " [+截图]" if has_image else ""
-        logger.debug(
-            "──── 📤 Round %d | 上下文 %d 条消息%s ────\n%s",
-            round_num, len(context), image_tag, text,
+        import json
+
+        def _truncate_msg(msg: dict) -> dict:
+            """截断图片数据，保留结构"""
+            content = msg.get("content", "")
+            if not isinstance(content, list):
+                return msg
+            truncated = []
+            for part in content:
+                if part.get("type") == "image_url":
+                    url = part.get("image_url", {}).get("url", "")
+                    truncated.append({
+                        "type": "image_url",
+                        "image_url": {"url": f"{url[:80]}...[truncated]"},
+                    })
+                else:
+                    truncated.append(part)
+            return {**msg, "content": truncated}
+
+        display = [_truncate_msg(m) for m in context]
+        log_ai_call.debug(
+            "request messages (%d messages):\n%s",
+            len(context),
+            json.dumps(display, ensure_ascii=False, indent=2),
         )
 
     @staticmethod
     def _log_response(round_num: int, action: UnifiedAction, output):
-        logger.debug(
-            "──── 📥 Round %d | 动作: %s (%s, %s) ────\n%s",
-            round_num, action.type.value, action.x, action.y, output.thinking,
+        log_ai_call.debug(
+            "response: %s (%s, %s) | thinking: %s",
+            action.type.value, action.x, action.y, output.thinking,
         )

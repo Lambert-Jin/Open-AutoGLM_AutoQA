@@ -10,7 +10,7 @@ from openai import OpenAI
 
 from executor.actions import ModelOutput
 
-logger = logging.getLogger(__name__)
+log_ai_call = logging.getLogger("autoqa:ai:call")
 
 
 @dataclass
@@ -64,8 +64,8 @@ class BaseModelClient:
             except Exception as e:
                 if attempt < self._config.max_retries:
                     wait = self._config.retry_delay * (attempt + 1)
-                    logger.warning(
-                        "模型调用失败 (attempt %d/%d), %.1fs 后重试: %s",
+                    log_ai_call.warning(
+                        "调用失败 (attempt %d/%d), %.1fs 后重试: %s",
                         attempt + 1,
                         self._config.max_retries + 1,
                         wait,

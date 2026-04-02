@@ -11,7 +11,7 @@ from device import Device
 from device.timing import TIMING
 from executor.actions import ActionType, UnifiedAction
 
-logger = logging.getLogger(__name__)
+log_action = logging.getLogger("autoqa:action")
 
 
 @dataclass
@@ -53,7 +53,7 @@ class ActionExecutor:
 
         handler = self._HANDLERS.get(action.type)
         if not handler:
-            logger.warning("未知动作类型: %s", action.type)
+            log_action.warning("未知动作类型: %s", action.type)
             return ActionExecuteResult(
                 success=False, message="Unknown action: " + str(action.type)
             )
@@ -62,7 +62,7 @@ class ActionExecutor:
             handler(self, action)
             return ActionExecuteResult(success=True)
         except Exception as e:
-            logger.error("动作执行失败 [%s]: %s", action.type.value, e)
+            log_action.error("动作执行失败 [%s]: %s", action.type.value, e)
             return ActionExecuteResult(success=False, message=str(e))
 
     # ── 动作处理器 ──
@@ -71,7 +71,7 @@ class ActionExecutor:
         # 带 message 的 Tap 需要确认
         if a.text and self._confirmation_callback:
             if not self._confirmation_callback(a.text):
-                logger.info("用户取消操作: %s", a.text)
+                log_action.info("用户取消操作: %s", a.text)
                 return
         self._device.tap(a.x, a.y)
 
@@ -135,10 +135,10 @@ class ActionExecutor:
         self._takeover_callback(a.text or "请完成需要手动操作的步骤")
 
     def _note(self, a: UnifiedAction):
-        logger.info("Note: %s", a.text)
+        log_action.info("Note: %s", a.text)
 
     def _call_api(self, a: UnifiedAction):
-        logger.info("Call_API: %s (未实现)", a.text)
+        log_action.info("Call_API: %s (未实现)", a.text)
 
     # ── 动作分发表 ──
 
