@@ -17,6 +17,7 @@ from monitor import ActionTraceContext, NoopMonitorGateway
 if TYPE_CHECKING:
     from cache import ActionCache
     from monitor import MonitorGateway
+    from optimizer import ActionOptimizer
 
 logger = logging.getLogger(__name__)
 
@@ -25,6 +26,7 @@ log_ai_call = logging.getLogger("autoqa:ai:call")        # 模型请求/响应
 log_ai_stats = logging.getLogger("autoqa:ai:stats")      # token/耗时统计
 log_executor = logging.getLogger("autoqa:executor")       # 执行流程
 log_cache = logging.getLogger("autoqa:cache")             # 缓存命中/写入
+log_optimizer = logging.getLogger("autoqa:optimizer")     # 指令优化
 
 
 @dataclass
@@ -40,9 +42,10 @@ class TestExecutor:
     """
     测试执行器。
 
-    上下文策略：步骤级隔离，直接发送原始指令 + 截图给 AutoGLM
+    上下文策略：步骤级隔离 + 跨步骤指令优化
     - 每个 execute_action() 调用独立维护上下文（system prompt + 当前步骤对话）
     - 步骤间不共享完整历史，避免前序步骤的残留信息误导模型
+    - 通过 ActionOptimizer 将上一步的对话历史 + 当前指令生成优化后的指令
     """
 
     MAX_ROUNDS_PER_STEP = 15  # 单步骤内最多对话轮次
@@ -54,6 +57,7 @@ class TestExecutor:
         max_steps_per_action: int = 20,
         action_cache: ActionCache | None = None,
         post_action_delay: float = 2.0,
+        action_optimizer: ActionOptimizer | None = None,
         monitor: MonitorGateway | None = None,
     ):
         self.model = model
@@ -63,8 +67,10 @@ class TestExecutor:
         self.max_steps = max_steps_per_action
         self.action_cache = action_cache
         self.post_action_delay = post_action_delay  # 动作执行后等待页面加载的延迟（秒）
+        self.action_optimizer = action_optimizer
         self.monitor = monitor or NoopMonitorGateway()
         self._system_prompt: str = ""  # 缓存 system prompt，避免重复获取
+        self._last_step_context: list[dict[str, Any]] = []  # 上一步的对话历史
 
     def execute_action(
         self,
@@ -85,12 +91,28 @@ class TestExecutor:
         verbose = logger.isEnabledFor(logging.DEBUG)
         original_description = description  # 保留原始描述用于日志
 
-        # 每步独立上下文：system prompt + 当前步骤对话
+        # 构建上下文：system prompt + 历史对话 + 当前步骤
         if not self._system_prompt:
             self._system_prompt = self.model.get_system_prompt()
         context: list[dict[str, Any]] = [
             {"role": "system", "content": self._system_prompt},
         ]
+
+        # ── 指令优化：将历史对话 + 当前指令输入给 optimizer ──
+        if self.action_optimizer and self._last_step_context:
+            log_optimizer.info("开始优化指令 (历史 %d 条消息): %s", len(self._last_step_context), description)
+            description = self.action_optimizer.optimize(description, self._last_step_context)
+            log_optimizer.info("优化结果: %s", description)
+        elif self.action_optimizer:
+            log_optimizer.info("跳过优化 (无历史对话): %s", description)
+
+        # ── 注入历史对话（跳过 system prompt，旧截图替换为占位文字）──
+        if self._last_step_context:
+            for msg in self._last_step_context:
+                if msg.get("role") == "system":
+                    continue
+                context.append(self._strip_images(msg))
+            log_executor.info("注入历史对话: %d 条消息", len(context) - 1)
 
         # 截图 + 构造消息
         screenshot = self.device.screenshot()
@@ -197,6 +219,7 @@ class TestExecutor:
             # finish → 步骤完成
             if action.is_finish:
                 log_executor.info("步骤完成: %s (共 %d 轮)", original_description, round_num + 1)
+                self._last_step_context = context  # 保存对话历史供下一步 optimizer 使用
                 exec_result = ExecutorActionResult(
                     success=True, actions_taken=actions_taken,
                     rounds=round_num + 1,
@@ -223,6 +246,7 @@ class TestExecutor:
                 self.monitor.on_action_after(
                     trace, action, screenshot, success=result.success, message=result.message,
                 )
+                self._last_step_context = context
                 exec_result = ExecutorActionResult(
                     success=result.success, actions_taken=actions_taken,
                     rounds=round_num + 1, error=result.message,
@@ -247,9 +271,10 @@ class TestExecutor:
                 # 敏感屏幕（支付/安全页面）：使用上次的截图尺寸，不发图片
                 current_app = self.device.current_app()
                 screen_info = self.model.build_screen_info(current_app)
+                feedback = self._build_feedback(action, result)
                 context.append(
                     self.model.build_user_message(
-                        text=f"** Screen Info **\n{screen_info}\n"
+                        text=f"{feedback}\n{screen_info}\n"
                              "⚠️ 当前页面截图受限（可能是支付/安全页面），请根据之前的上下文继续操作",
                     )
                 )
@@ -260,16 +285,18 @@ class TestExecutor:
             )
             current_app = self.device.current_app()
             screen_info = self.model.build_screen_info(current_app)
+            feedback = self._build_feedback(action, result)
 
             context.append(
                 self.model.build_user_message(
-                    text=f"** Screen Info **\n{screen_info}",
+                    text=f"{feedback}\n{screen_info}",
                     image_base64=screenshot.base64_data,
                     screen_width=screenshot.width,
                     screen_height=screenshot.height,
                 )
             )
 
+        self._last_step_context = context
         return ExecutorActionResult(
             success=False, actions_taken=actions_taken,
             rounds=self.max_steps, error="max_steps exceeded",
@@ -290,6 +317,7 @@ class TestExecutor:
     def reset(self):
         """重置状态（切换 TestCase 时调用）"""
         self._system_prompt = ""
+        self._last_step_context = []
         log_executor.debug("已重置")
 
     @staticmethod
@@ -361,6 +389,41 @@ class TestExecutor:
             log_cache.warning("写入失败: %s", e)
 
     @staticmethod
+    def _strip_images(message: dict) -> dict:
+        """将消息中的图片替换为占位文字（用于历史对话注入，节省 token）"""
+        content = message.get("content", "")
+        if not isinstance(content, list):
+            return message
+        stripped = []
+        for part in content:
+            if part.get("type") == "image_url":
+                stripped.append({"type": "text", "text": "(历史截图已省略)"})
+            else:
+                stripped.append(part)
+        return {**message, "content": stripped}
+
+    @staticmethod
+    def _build_feedback(action: UnifiedAction, result: _AER) -> str:
+        """构建执行反馈文本，注入到下一轮 user message 中"""
+        atype = action.type
+        if atype in (ActionType.TAP, ActionType.DOUBLE_TAP, ActionType.LONG_PRESS):
+            params = f"({action.x}, {action.y})"
+        elif atype == ActionType.SWIPE:
+            params = f"(({action.x},{action.y})→({action.end_x},{action.end_y}))"
+        elif atype == ActionType.TYPE:
+            text_preview = action.text[:20] + "..." if action.text and len(action.text) > 20 else action.text
+            params = f'("{text_preview}")'
+        elif atype == ActionType.LAUNCH:
+            params = f"({action.text})"
+        elif atype == ActionType.WAIT:
+            params = f"({action.duration_ms or 2000}ms)"
+        else:
+            params = ""
+
+        status = "执行成功" if result.success else f"执行失败：{result.message}" if result.message else "执行失败"
+        return f"[执行反馈] 已执行 {atype.value}{params}，{status}。以下是最新截图："
+
+    @staticmethod
     def _log_request(context: list[dict], round_num: int):
         import json
 
@@ -391,6 +454,6 @@ class TestExecutor:
     @staticmethod
     def _log_response(round_num: int, action: UnifiedAction, output):
         log_ai_call.debug(
-            "response: %s (%s, %s) | thinking: %s",
-            action.type.value, action.x, action.y, output.thinking,
+            "response content:\n%s",
+            output.raw_content,
         )

@@ -54,6 +54,8 @@ def _build_system_prompt_cn(custom_rules: list[str] | None = None) -> str:
 - {{think}} 是对你为什么选择这个操作的简短推理说明。
 - {{action}} 是本次执行的具体操作指令，必须严格遵循下方定义的指令格式。
 
+重要：每次回复只能输出一个 <answer> 和一个操作指令。执行后你会收到新的截图，再决定下一步操作。严禁在一次回复中输出多个操作、预测屏幕变化或自行模拟后续步骤。
+
 操作指令及其作用如下：
 - do(action="Launch", app="xxx")
     Launch是启动目标app的操作，这比通过主屏幕导航更快。此操作完成后，您将自动收到结果状态的截图。
@@ -107,6 +109,7 @@ def _build_system_prompt_cn(custom_rules: list[str] | None = None) -> str:
 16. 在做游戏任务时如果在战斗页面如果有自动战斗一定要开启自动战斗，如果多轮历史状态相似要检查自动战斗是否开启。
 17. 如果没有合适的搜索结果，可能是因为搜索页面不对，请返回到搜索页面的上一级尝试重新搜索，如果尝试三次返回上一级搜索后仍然没有符合要求的结果，执行 finish(message="原因")。
 18. 在结束任务前请一定要仔细检查任务是否完整准确的完成，如果出现错选、漏选、多选的情况，请返回之前的步骤进行纠正。
+19. 严格只执行指令要求的操作，不要自行推断下一步或多做额外操作。例如指令要求"找到某个按钮"，你只需要确认该按钮在屏幕上可见即可，不要自动点击它。完成指令要求的操作后立即 finish。
 """.format(date=formatted_date)
 
     if custom_rules:
@@ -356,9 +359,10 @@ class AutoGLMModel:
         if think_match and answer_match:
             return think_match.group(1).strip(), answer_match.group(1).strip()
 
-        # 回退：查找 finish(...) 或 do(...)
-        for marker in ("finish(message=", "do(action="):
-            idx = raw.find(marker)
+        # 回退：从后往前查找最后一个 do(...) 或 finish(...)
+        # 优先找 do(action=，因为模型有时在 thinking 中提到 finish 但实际要执行 do
+        for marker in ("do(action=", "finish(message="):
+            idx = raw.rfind(marker)
             if idx >= 0:
                 return raw[:idx].strip(), raw[idx:].strip()
 

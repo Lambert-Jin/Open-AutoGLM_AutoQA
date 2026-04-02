@@ -64,7 +64,7 @@ def _setup_logging(verbose: bool):
     for module in ("executor", "runner", "asserter", "planner", "screenshot", "config", "device", "cache", "monitor"):
         logging.getLogger(module).setLevel(level)
     # topic loggers
-    for topic in ("autoqa:ai:call", "autoqa:ai:stats", "autoqa:executor", "autoqa:cache", "autoqa:action", "autoqa:runner"):
+    for topic in ("autoqa:ai:call", "autoqa:ai:stats", "autoqa:executor", "autoqa:cache", "autoqa:action", "autoqa:runner", "autoqa:optimizer"):
         logging.getLogger(topic).setLevel(level)
     # scrcpy 后台线程日志始终静默，避免打断交互输入
     logging.getLogger("autoqa:scrcpy").setLevel(logging.WARNING)
@@ -153,10 +153,14 @@ def _build_components(
         custom_rules=model_config.custom_rules,
     )
 
+    from optimizer import ActionOptimizer
+
+    action_optimizer = ActionOptimizer(llm_config) if llm_config else None
     monitor = MonitorRuntime(monitor_config, device_id=device.device_id) if monitor_config and monitor_config.enabled else None
 
     executor = TestExecutor(
         model=action_model, device=device, action_cache=action_cache,
+        action_optimizer=action_optimizer,
         monitor=monitor,
     )
     asserter = Asserter(vlm_config)
