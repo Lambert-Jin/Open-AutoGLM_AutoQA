@@ -39,8 +39,8 @@ class ADBDevice:
                 )
                 if len(png_bytes) < 100:
                     raise RuntimeError("截图数据过小，可能为空")
-                b64 = base64.b64encode(png_bytes).decode()
                 width, height = self._parse_png_size(png_bytes)
+                b64 = self._compress_to_jpeg_base64(png_bytes)
                 return DeviceScreenshot(base64_data=b64, width=width, height=height)
             except RuntimeError as e:
                 if attempt == 0:
@@ -77,8 +77,8 @@ class ADBDevice:
             self._cmd.run(["pull", remote, local], timeout=timeout)
             with open(local, "rb") as f:
                 png_bytes = f.read()
-            b64 = base64.b64encode(png_bytes).decode()
             width, height = self._parse_png_size(png_bytes)
+            b64 = self._compress_to_jpeg_base64(png_bytes)
             return DeviceScreenshot(base64_data=b64, width=width, height=height)
         finally:
             os.unlink(local)
@@ -102,6 +102,16 @@ class ADBDevice:
             width, height = struct.unpack(">II", data[16:24])
             return width, height
         return 1080, 2400  # 兜底
+
+    @staticmethod
+    def _compress_to_jpeg_base64(png_bytes: bytes, quality: int = 75) -> str:
+        """将 PNG 截图压缩为 JPEG base64，大幅减小体积"""
+        import io
+        from PIL import Image
+        img = Image.open(io.BytesIO(png_bytes)).convert("RGB")
+        buf = io.BytesIO()
+        img.save(buf, format="JPEG", quality=quality)
+        return base64.b64encode(buf.getvalue()).decode()
 
     # ── App 管理 ──
 

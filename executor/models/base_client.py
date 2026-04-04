@@ -86,8 +86,9 @@ class BaseModelClient:
             "frequency_penalty": self._config.frequency_penalty,
             "stream": stream,
         }
-        if self._config.extra_body:
-            params["extra_body"] = self._config.extra_body
+        extra = dict(self._config.extra_body) if self._config.extra_body else {}
+        extra.setdefault("skip_special_tokens", False)
+        params["extra_body"] = extra
         return params
 
     def _request_stream(self, messages: list[dict]) -> ModelOutput:
