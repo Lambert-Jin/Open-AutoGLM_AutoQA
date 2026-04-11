@@ -23,7 +23,6 @@ class TokenUsage:
 class InstructionData:
     original: str
     optimized: str  # ActionOptimizer 输出（无历史时与 original 相同）
-    optimization_source: str = ""  # 优化来源标记
 
 
 @dataclass
@@ -38,11 +37,10 @@ class RoundData:
 class ActionStepData:
     step_index: int
     instruction: InstructionData
+    injected_history_length: int = 0  # 注入了多少条历史对话
     rounds: list[RoundData] = field(default_factory=list)
     conversation_history: list[dict[str, Any]] = field(default_factory=list)
     result: dict[str, Any] = field(default_factory=dict)
-    injected_history_length: int = 0  # 注入了多少条历史对话
-    optimizer_context: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -158,7 +156,6 @@ class EvalManifest:
                         rounds=rounds,
                         conversation_history=s.get("conversation_history", []),
                         result=s.get("result", {}),
-                        optimizer_context=s.get("optimizer_context", {}),
                     ))
                 else:
                     steps.append(AssertStepData(
