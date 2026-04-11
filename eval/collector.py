@@ -1,0 +1,173 @@
+"""ScreenshotCollector: 包装 TestRunner 采集完整评测数据"""
+from __future__ import annotations
+
+import base64
+import logging
+import os
+import time
+from typing import Any
+
+from config.settings import AssertResult
+from eval.models import (
+    ActionStepData,
+    AssertStepData,
+    EvalCaseData,
+    EvalManifest,
+    InstructionData,
+    RoundData,
+    TokenCount,
+    TokenUsage,
+)
+from executor import ExecutorActionResult
+from runner import TestRunner
+from suite import (
+    ActionStep,
+    AssertStep,
+    StepResult,
+    TestCase,
+    TestCaseResult,
+    TestSuite,
+    TestSuiteResult,
+)
+
+logger = logging.getLogger(__name__)
+
+
+class ScreenshotCollector:
+    """
+    包装 TestRunner，在测试运行时采集完整数据用于评测。
+
+    工作方式：
+    1. 调用 runner.run_suite() 执行测试
+    2. 从 TestSuiteResult 提取结果数据（ExecutorActionResult 已包含过程数据）
+    3. 将截图保存到磁盘，构建 EvalManifest
+    """
+
+    def __init__(
+        self,
+        runner: TestRunner,
+        output_dir: str,
+        yaml_path: str = "",
+    ):
+        self.runner = runner
+        self.output_dir = output_dir
+        self.yaml_path = yaml_path
+
+    def collect(self, suite: TestSuite) -> EvalManifest:
+        """执行测试并采集评测数据"""
+        run_id = time.strftime("%Y%m%d_%H%M%S")
+        run_dir = os.path.join(self.output_dir, run_id)
+        screenshots_dir = os.path.join(run_dir, "screenshots")
+        os.makedirs(screenshots_dir, exist_ok=True)
+
+        # 执行测试
+        suite_result = self.runner.run_suite(suite)
+
+        # 从结果构建 manifest
+        manifest = self._build_manifest(
+            run_id, suite, suite_result, screenshots_dir,
+        )
+
+        # 持久化
+        manifest.save(os.path.join(run_dir, "eval_manifest.json"))
+        logger.info("评测数据已保存: %s", run_dir)
+
+        return manifest
+
+    def _build_manifest(
+        self,
+        run_id: str,
+        suite: TestSuite,
+        suite_result: TestSuiteResult,
+        screenshots_dir: str,
+    ) -> EvalManifest:
+        cases = []
+        for case_idx, case_result in enumerate(suite_result.cases):
+            original_case = suite.test_cases[case_idx] if case_idx < len(suite.test_cases) else None
+            description = original_case.description if original_case else ""
+
+            steps = []
+            for step_idx, step_result in enumerate(case_result.steps):
+                step_data = self._build_step_data(
+                    step_result, step_idx, case_idx, screenshots_dir,
+                )
+                steps.append(step_data)
+
+            cases.append(EvalCaseData(
+                case_name=case_result.case_name,
+                status=case_result.status,
+                description=description,
+                steps=steps,
+            ))
+
+        return EvalManifest(
+            run_id=run_id,
+            suite_name=suite_result.suite_name,
+            yaml_path=self.yaml_path,
+            token_usage=TokenUsage(),  # TODO: aggregate from round_outputs
+            cases=cases,
+        )
+
+    def _build_step_data(
+        self,
+        step_result: StepResult,
+        step_idx: int,
+        case_idx: int,
+        screenshots_dir: str,
+    ) -> ActionStepData | AssertStepData:
+        step = step_result.step
+
+        if isinstance(step, ActionStep):
+            detail: ExecutorActionResult = step_result.detail
+            rounds = []
+            for i, (before_b64, after_b64) in enumerate(detail.round_screenshots):
+                before_path = os.path.join(screenshots_dir, f"c{case_idx}_s{step_idx}_r{i}_before.png")
+                after_path = os.path.join(screenshots_dir, f"c{case_idx}_s{step_idx}_r{i}_after.png")
+                self._save_screenshot(before_b64, before_path)
+                self._save_screenshot(after_b64, after_path)
+                output = detail.round_outputs[i] if i < len(detail.round_outputs) else {}
+                rounds.append(RoundData(
+                    screenshot_before=before_path,
+                    model_output=output,
+                    screenshot_after=after_path,
+                ))
+
+            return ActionStepData(
+                step_index=step_idx,
+                instruction=InstructionData(
+                    original=step.description,
+                    optimized=detail.optimized_instruction,
+                ),
+                injected_history_length=detail.injected_history_length,
+                rounds=rounds,
+                conversation_history=detail.conversation_history,
+                result={
+                    "success": detail.success,
+                    "rounds": detail.rounds,
+                    "actions_taken": detail.actions_taken,
+                    "error": detail.error,
+                    "time_ms": step_result.timing.duration_ms,
+                },
+            )
+        else:
+            detail: AssertResult = step_result.detail
+            return AssertStepData(
+                step_index=step_idx,
+                expectation=step.expectation,
+                severity=step.severity,
+                screenshot="",  # assert 截图需要从 runner 层面捕获
+                result={
+                    "passed": detail.passed,
+                    "reason": detail.reason,
+                    "confidence": detail.confidence,
+                    "retried": detail.retried,
+                },
+            )
+
+    @staticmethod
+    def _save_screenshot(base64_data: str, path: str):
+        if not base64_data:
+            return
+        import base64 as b64
+        with open(path, "wb") as f:
+            f.write(b64.b64decode(base64_data))
