@@ -94,19 +94,22 @@ class BaseModelClient:
     def _request_stream(self, messages: list[dict]) -> ModelOutput:
         start = time.time()
         first_token_time = None
-
-        response = self._client.chat.completions.create(
-            **self._build_params(messages, stream=True)
-        )
+        params = self._build_params(messages, stream=True)
+        params["stream_options"] = {"include_usage": True}
+        response = self._client.chat.completions.create(**params)
 
         content = ""
+        prompt_tokens = 0
+        completion_tokens = 0
         for chunk in response:
-            delta = chunk.choices[0].delta.content or ""
+            if chunk.usage:
+                prompt_tokens = chunk.usage.prompt_tokens or 0
+                completion_tokens = chunk.usage.completion_tokens or 0
+            delta = chunk.choices[0].delta.content or "" if chunk.choices else ""
             if delta:
                 if first_token_time is None:
                     first_token_time = time.time() - start
                 content += delta
-                # logger.debug("stream token: %s", delta)
 
         return ModelOutput(
             thinking="",
@@ -114,6 +117,8 @@ class BaseModelClient:
             raw_content=content,
             time_to_first_token=first_token_time,
             total_time=time.time() - start,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
         )
 
     def _request_sync(self, messages: list[dict]) -> ModelOutput:
@@ -124,9 +129,16 @@ class BaseModelClient:
         )
 
         content = response.choices[0].message.content or ""
+        prompt_tokens = 0
+        completion_tokens = 0
+        if response.usage:
+            prompt_tokens = response.usage.prompt_tokens or 0
+            completion_tokens = response.usage.completion_tokens or 0
         return ModelOutput(
             thinking="",
             action_text="",
             raw_content=content,
             total_time=time.time() - start,
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
         )

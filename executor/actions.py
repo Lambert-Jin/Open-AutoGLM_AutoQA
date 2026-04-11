@@ -64,3 +64,5 @@ class ModelOutput:
     raw_content: str
     time_to_first_token: float | None = None
     total_time: float = 0.0
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
