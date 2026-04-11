@@ -36,6 +36,12 @@ class ExecutorActionResult:
     actions_taken: list[dict] = field(default_factory=list)
     rounds: int = 0
     error: str | None = None
+    # 评测扩展字段
+    optimized_instruction: str = ""
+    conversation_history: list[dict] = field(default_factory=list)
+    round_screenshots: list[tuple[str, str]] = field(default_factory=list)  # [(before_b64, after_b64)]
+    round_outputs: list[dict] = field(default_factory=list)  # [{"thinking", "action_text", "timing", "feedback"}]
+    injected_history_length: int = 0  # 注入的历史对话条数
 
 
 class TestExecutor:
@@ -90,6 +96,10 @@ class TestExecutor:
         actions_taken: list[dict] = []
         verbose = logger.isEnabledFor(logging.DEBUG)
         original_description = description  # 保留原始描述用于日志
+        optimized_instruction = description
+        round_screenshots: list[tuple[str, str]] = []
+        round_outputs: list[dict] = []
+        injected_history_length = 0
 
         # 构建上下文：system prompt + 历史对话 + 当前步骤
         if not self._system_prompt:
@@ -105,6 +115,7 @@ class TestExecutor:
             log_optimizer.info("优化结果: %s", description)
         elif self.action_optimizer:
             log_optimizer.info("跳过优化 (无历史对话): %s", description)
+        optimized_instruction = description  # description was modified by optimizer
 
         # ── 注入历史对话（跳过 system prompt，旧截图替换为占位文字）──
         if self._last_step_context:
@@ -113,6 +124,7 @@ class TestExecutor:
                     continue
                 context.append(self._strip_images(msg))
             log_executor.info("注入历史对话: %d 条消息", len(context) - 1)
+            injected_history_length = len(context) - 1  # minus system prompt
 
         # 截图 + 构造消息
         screenshot = self.device.screenshot()
@@ -161,6 +173,11 @@ class TestExecutor:
                         success=True,
                         actions_taken=[{"type": params["action_type"], "x": params["x"], "y": params["y"]}],
                         rounds=0,
+                        optimized_instruction=optimized_instruction,
+                        conversation_history=list(context),
+                        round_screenshots=[],
+                        round_outputs=[],
+                        injected_history_length=injected_history_length,
                     )
                 self.monitor.on_action_after(
                     cache_trace, cache_action, cache_after,
@@ -186,6 +203,7 @@ class TestExecutor:
                 self._log_request(context, round_num + 1)
 
             # 调用模型
+            round_before_screenshot = screenshot.base64_data
             log_ai_call.info("sending request to %s (round %d)", self.model.__class__.__name__, round_num + 1)
             try:
                 output = self.model.call(context)
@@ -194,6 +212,11 @@ class TestExecutor:
                 return ExecutorActionResult(
                     success=False, actions_taken=actions_taken,
                     rounds=round_num + 1, error=f"Model error: {e}",
+                    optimized_instruction=optimized_instruction,
+                    conversation_history=list(context),
+                    round_screenshots=round_screenshots,
+                    round_outputs=round_outputs,
+                    injected_history_length=injected_history_length,
                 )
 
             # 耗时统计
@@ -206,6 +229,13 @@ class TestExecutor:
 
             # 解析为 UnifiedAction
             action = self.model.parse(output, screenshot.width, screenshot.height)
+            round_outputs.append({
+                "thinking": output.thinking,
+                "action_text": output.action_text,
+                "raw_content": output.raw_content,
+                "timing": {"ttft": output.time_to_first_token, "total": output.total_time},
+                "feedback": "",
+            })
 
             if verbose:
                 self._log_response(round_num + 1, action, output)
@@ -223,6 +253,11 @@ class TestExecutor:
                 exec_result = ExecutorActionResult(
                     success=True, actions_taken=actions_taken,
                     rounds=round_num + 1,
+                    optimized_instruction=optimized_instruction,
+                    conversation_history=list(context),
+                    round_screenshots=round_screenshots,
+                    round_outputs=round_outputs,
+                    injected_history_length=injected_history_length,
                 )
                 self._maybe_cache_action(
                     cache_key, exec_result, actions_taken,
@@ -250,6 +285,11 @@ class TestExecutor:
                 exec_result = ExecutorActionResult(
                     success=result.success, actions_taken=actions_taken,
                     rounds=round_num + 1, error=result.message,
+                    optimized_instruction=optimized_instruction,
+                    conversation_history=list(context),
+                    round_screenshots=round_screenshots,
+                    round_outputs=round_outputs,
+                    injected_history_length=injected_history_length,
                 )
                 self._maybe_cache_action(
                     cache_key, exec_result, actions_taken,
@@ -272,6 +312,9 @@ class TestExecutor:
                 current_app = self.device.current_app()
                 screen_info = self.model.build_screen_info(current_app)
                 feedback = self._build_feedback(action, result)
+                if round_outputs:
+                    round_outputs[-1]["feedback"] = feedback
+                round_screenshots.append((round_before_screenshot, ""))  # 敏感页面无 after 截图
                 context.append(
                     self.model.build_user_message(
                         text=f"{feedback}\n{screen_info}\n"
@@ -286,6 +329,9 @@ class TestExecutor:
             current_app = self.device.current_app()
             screen_info = self.model.build_screen_info(current_app)
             feedback = self._build_feedback(action, result)
+            if round_outputs:
+                round_outputs[-1]["feedback"] = feedback
+            round_screenshots.append((round_before_screenshot, screenshot.base64_data))
 
             context.append(
                 self.model.build_user_message(
@@ -300,6 +346,11 @@ class TestExecutor:
         return ExecutorActionResult(
             success=False, actions_taken=actions_taken,
             rounds=self.max_steps, error="max_steps exceeded",
+            optimized_instruction=optimized_instruction,
+            conversation_history=list(context),
+            round_screenshots=round_screenshots,
+            round_outputs=round_outputs,
+            injected_history_length=injected_history_length,
         )
 
     def handle_unexpected(
