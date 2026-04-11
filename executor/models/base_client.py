@@ -105,7 +105,7 @@ class BaseModelClient:
             if chunk.usage:
                 prompt_tokens = chunk.usage.prompt_tokens or 0
                 completion_tokens = chunk.usage.completion_tokens or 0
-            delta = chunk.choices[0].delta.content or "" if chunk.choices else ""
+            delta = (chunk.choices[0].delta.content or "") if chunk.choices else ""
             if delta:
                 if first_token_time is None:
                     first_token_time = time.time() - start

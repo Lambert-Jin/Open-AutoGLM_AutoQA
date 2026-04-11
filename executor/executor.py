@@ -249,6 +249,7 @@ class TestExecutor:
             # finish → 步骤完成
             if action.is_finish:
                 log_executor.info("步骤完成: %s (共 %d 轮)", original_description, round_num + 1)
+                round_screenshots.append((round_before_screenshot, ""))  # finish 无 after 截图
                 self._last_step_context = context  # 保存对话历史供下一步 optimizer 使用
                 exec_result = ExecutorActionResult(
                     success=True, actions_taken=actions_taken,
@@ -281,6 +282,7 @@ class TestExecutor:
                 self.monitor.on_action_after(
                     trace, action, screenshot, success=result.success, message=result.message,
                 )
+                round_screenshots.append((round_before_screenshot, ""))  # should_finish 无 after 截图
                 self._last_step_context = context
                 exec_result = ExecutorActionResult(
                     success=result.success, actions_taken=actions_taken,

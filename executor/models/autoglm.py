@@ -268,6 +268,8 @@ class AutoGLMModel:
             raw_content=output.raw_content,
             time_to_first_token=output.time_to_first_token,
             total_time=output.total_time,
+            prompt_tokens=output.prompt_tokens,
+            completion_tokens=output.completion_tokens,
         )
 
     def parse(
