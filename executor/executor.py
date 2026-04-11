@@ -234,6 +234,8 @@ class TestExecutor:
                 "action_text": output.action_text,
                 "raw_content": output.raw_content,
                 "timing": {"ttft": output.time_to_first_token, "total": output.total_time},
+                "prompt_tokens": output.prompt_tokens,
+                "completion_tokens": output.completion_tokens,
                 "feedback": "",
             })
 
