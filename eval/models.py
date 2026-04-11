@@ -29,7 +29,6 @@ class InstructionData:
 class RoundData:
     screenshot_before: str
     model_output: dict[str, Any]
-    parsed_action: dict[str, Any]
     screenshot_after: str
 
 
