@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>AutoQA 评测诊断报告</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; max-width: 960px; margin: 0 auto; padding: 20px; color: #333; }
+  h1 { border-bottom: 2px solid #2196F3; padding-bottom: 10px; }
+  h2 { color: #1976D2; margin-top: 30px; }
+  .score-big { font-size: 48px; font-weight: bold; text-align: center; margin: 20px 0; }
+  .score-good { color: #4CAF50; }
+  .score-warn { color: #FF9800; }
+  .score-bad { color: #F44336; }
+  .summary-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin: 16px 0; }
+  .summary-card { background: #f5f5f5; border-radius: 8px; padding: 16px; text-align: center; }
+  .summary-card .label { font-size: 12px; color: #666; }
+  .summary-card .value { font-size: 24px; font-weight: bold; margin-top: 4px; }
+  table { width: 100%; border-collapse: collapse; margin: 16px 0; }
+  th, td { border: 1px solid #ddd; padding: 8px 12px; text-align: left; }
+  th { background: #f0f0f0; }
+  .tag { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 12px; font-weight: bold; }
+  .tag-confirmed-pass { background: #E8F5E9; color: #2E7D32; }
+  .tag-confirmed-fail { background: #FFEBEE; color: #C62828; }
+  .tag-false-pass { background: #FFF3E0; color: #E65100; }
+  .tag-false-fail { background: #E3F2FD; color: #1565C0; }
+  .tag-ambiguous { background: #F3E5F5; color: #6A1B9A; }
+  .token-bar { display: flex; gap: 8px; margin: 8px 0; }
+  .token-segment { padding: 4px 12px; border-radius: 4px; font-size: 12px; color: white; }
+</style>
+</head>
+<body>
+<h1>AutoQA 评测诊断报告</h1>
+
+<div class="score-big {% if reliability_score >= 80 %}score-good{% elif reliability_score >= 60 %}score-warn{% else %}score-bad{% endif %}">
+  {{ "%.1f"|format(reliability_score) }}
+</div>
+<p style="text-align:center; color:#666;">测试可靠性评分 (0-100)</p>
+
+<h2>1. 概览</h2>
+<div class="summary-grid">
+  <div class="summary-card">
+    <div class="label">断言总数</div>
+    <div class="value">{{ asserter_eval.summary.total_assertions }}</div>
+  </div>
+  <div class="summary-card">
+    <div class="label">确认通过</div>
+    <div class="value" style="color:#4CAF50">{{ asserter_eval.summary.confirmed_pass }}</div>
+  </div>
+  <div class="summary-card">
+    <div class="label">假成功</div>
+    <div class="value" style="color:#E65100">{{ asserter_eval.summary.false_pass }}</div>
+  </div>
+  <div class="summary-card">
+    <div class="label">操作正确率</div>
+    <div class="value">{{ executor_eval.summary.action_correct }}/{{ executor_eval.summary.total_actions }}</div>
+  </div>
+  <div class="summary-card">
+    <div class="label">平均轮数</div>
+    <div class="value">{{ executor_eval.summary.avg_rounds }}</div>
+  </div>
+</div>
+
+<h3>Token 用量</h3>
+<div class="token-bar">
+  <span class="token-segment" style="background:#2196F3">AutoGLM: {{ token_usage.autoglm.prompt + token_usage.autoglm.completion }}</span>
+  <span class="token-segment" style="background:#4CAF50">VLM: {{ token_usage.vlm.prompt + token_usage.vlm.completion }}</span>
+  <span class="token-segment" style="background:#FF9800">LLM: {{ token_usage.llm.prompt + token_usage.llm.completion }}</span>
+</div>
+
+<h2>2. 断言置信度验证</h2>
+<table>
+  <tr><th>用例</th><th>步骤</th><th>预期</th><th>原始结果</th><th>独立验证</th><th>判定</th></tr>
+  {% for d in asserter_eval.details %}
+  <tr>
+    <td>{{ d.case_name }}</td>
+    <td>{{ d.step_index }}</td>
+    <td>{{ d.expectation }}</td>
+    <td>{{ "PASS" if d.original.passed else "FAIL" }} ({{ "%.2f"|format(d.original.confidence) }})</td>
+    <td>{{ "PASS" if d.independent.passed else "FAIL" }} ({{ "%.2f"|format(d.independent.confidence) }})</td>
+    <td><span class="tag tag-{{ d.verdict|replace('_', '-') }}">{{ d.verdict }}</span></td>
+  </tr>
+  {% endfor %}
+</table>
+
+{% if asserter_eval.details | selectattr("verdict", "equalto", "false_pass") | list %}
+<h3>假成功详情</h3>
+{% for d in asserter_eval.details if d.verdict == "false_pass" %}
+<div style="background:#FFF3E0; padding:12px; border-radius:8px; margin:8px 0;">
+  <strong>{{ d.case_name }} - Step {{ d.step_index }}</strong>: {{ d.expectation }}<br>
+  <em>原始判断:</em> {{ d.original.reason }}<br>
+  <em>独立验证:</em> {{ d.independent.reason }}<br>
+  {% if d.risk_factors %}<em>风险因素:</em> {{ d.risk_factors | join(", ") }}{% endif %}
+</div>
+{% endfor %}
+{% endif %}
+
+<h2>3. 执行质量详情</h2>
+{% if executor_eval.details %}
+<table>
+  <tr><th>用例</th><th>步骤</th><th>指令</th><th>轮数</th><th>操作正确</th><th>状态正确</th><th>问题类型</th></tr>
+  {% for d in executor_eval.details %}
+  <tr>
+    <td>{{ d.case_name }}</td>
+    <td>{{ d.step_index }}</td>
+    <td>{{ d.description }}</td>
+    <td>{{ d.rounds }}</td>
+    <td>{{ "Y" if d.action_correct else "N" }}</td>
+    <td>{{ "Y" if d.state_correct else "N" }}</td>
+    <td>{{ d.issue_type or "-" }}</td>
+  </tr>
+  {% endfor %}
+</table>
+{% else %}
+<p>无执行步骤数据。</p>
+{% endif %}
+
+{% if planner_eval %}
+<h2>4. 规划质量详情</h2>
+{% for p in planner_eval %}
+<h3>{{ p.case_name }} (综合 {{ p.overall_score }}/5)</h3>
+<table>
+  <tr><th>维度</th><th>评分</th><th>理由</th></tr>
+  {% for dim, s in p.scores.items() %}
+  <tr><td>{{ dim }}</td><td>{{ s.score }}/5</td><td>{{ s.reason }}</td></tr>
+  {% endfor %}
+</table>
+{% endfor %}
+{% endif %}
+
+</body>
+</html>
