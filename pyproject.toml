@@ -9,10 +9,11 @@ dependencies = [
     "pyyaml>=6.0",
     "Pillow>=10.0",
     "av>=12.0",
+    "Jinja2>=3.0",
 ]
 
 [tool.setuptools.packages.find]
-include = ["asserter*", "config*", "executor*", "planner*", "screenshot*", "monitor*"]
+include = ["asserter*", "config*", "executor*", "eval*", "planner*", "screenshot*", "monitor*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
