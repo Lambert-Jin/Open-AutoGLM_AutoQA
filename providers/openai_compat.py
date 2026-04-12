@@ -34,6 +34,8 @@ class OpenAICompatProvider:
         self.default_max_tokens = max_tokens
         self.max_retries = max_retries
         self.retry_delay = retry_delay
+        self.total_prompt_tokens = 0
+        self.total_completion_tokens = 0
 
     def chat(
         self,
@@ -78,13 +80,20 @@ class OpenAICompatProvider:
 
     def _call_sync(self, params: dict) -> str:
         response = self.client.chat.completions.create(**params)
+        if response.usage:
+            self.total_prompt_tokens += response.usage.prompt_tokens or 0
+            self.total_completion_tokens += response.usage.completion_tokens or 0
         return response.choices[0].message.content or ""
 
     def _call_stream(self, params: dict) -> str:
+        params["stream_options"] = {"include_usage": True}
         response = self.client.chat.completions.create(**params)
         content = ""
         for chunk in response:
-            delta = chunk.choices[0].delta.content or ""
+            if chunk.usage:
+                self.total_prompt_tokens += chunk.usage.prompt_tokens or 0
+                self.total_completion_tokens += chunk.usage.completion_tokens or 0
+            delta = (chunk.choices[0].delta.content or "") if chunk.choices else ""
             if delta:
                 content += delta
         return content

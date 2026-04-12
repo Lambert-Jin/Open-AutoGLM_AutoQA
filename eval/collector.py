@@ -33,6 +33,22 @@ from suite import (
 logger = logging.getLogger(__name__)
 
 
+def _read_provider_tokens(obj, *attr_path) -> tuple[int, int]:
+    """安全地从嵌套属性链中读取 provider 的 token 累计值"""
+    try:
+        current = obj
+        for attr in attr_path:
+            current = getattr(current, attr)
+        provider = getattr(current, "provider")
+        prompt = provider.total_prompt_tokens
+        completion = provider.total_completion_tokens
+        if isinstance(prompt, int) and isinstance(completion, int):
+            return prompt, completion
+    except (AttributeError, TypeError):
+        pass
+    return 0, 0
+
+
 class ScreenshotCollector:
     """
     包装 TestRunner，在测试运行时采集完整数据用于评测。
@@ -100,8 +116,8 @@ class ScreenshotCollector:
                 steps=steps,
             ))
 
-        # 从 round_outputs 累加 token 用量
-        token_usage = self._aggregate_token_usage(cases)
+        # 累加 token 用量：AutoGLM 从 round_outputs，VLM/LLM 从 provider
+        token_usage = self._aggregate_token_usage(cases, self.runner)
 
         return EvalManifest(
             run_id=run_id,
@@ -112,7 +128,8 @@ class ScreenshotCollector:
         )
 
     @staticmethod
-    def _aggregate_token_usage(cases: list[EvalCaseData]) -> TokenUsage:
+    def _aggregate_token_usage(cases: list[EvalCaseData], runner) -> TokenUsage:
+        # AutoGLM: 从 round_outputs 累加
         autoglm_prompt = 0
         autoglm_completion = 0
         for case in cases:
@@ -122,8 +139,17 @@ class ScreenshotCollector:
                         out = rd.model_output
                         autoglm_prompt += out.get("prompt_tokens", 0)
                         autoglm_completion += out.get("completion_tokens", 0)
+
+        # VLM: 从 asserter.provider 读取累加值
+        vlm_prompt, vlm_completion = _read_provider_tokens(runner, "asserter")
+
+        # LLM: 从 executor.action_optimizer.provider 读取累加值
+        llm_prompt, llm_completion = _read_provider_tokens(runner, "executor", "action_optimizer")
+
         return TokenUsage(
             autoglm=TokenCount(prompt=autoglm_prompt, completion=autoglm_completion),
+            vlm=TokenCount(prompt=vlm_prompt, completion=vlm_completion),
+            llm=TokenCount(prompt=llm_prompt, completion=llm_completion),
         )
 
     def _build_step_data(

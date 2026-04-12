@@ -24,6 +24,8 @@ class GeminiProvider:
         self.model = model
         self.default_temperature = temperature
         self.default_max_tokens = max_tokens
+        self.total_prompt_tokens = 0
+        self.total_completion_tokens = 0
 
     def chat(
         self,
@@ -72,6 +74,9 @@ class GeminiProvider:
             contents=contents,
             config=config,
         )
+        if response.usage_metadata:
+            self.total_prompt_tokens += response.usage_metadata.prompt_token_count or 0
+            self.total_completion_tokens += response.usage_metadata.candidates_token_count or 0
         return response.text
 
     def _convert_content(self, content) -> list:
