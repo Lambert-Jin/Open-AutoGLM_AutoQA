@@ -169,11 +169,18 @@ class ScreenshotCollector:
             )
         else:
             detail: AssertResult = step_result.detail
+            # 保存 assert 截图到磁盘
+            assert_screenshot_path = ""
+            if detail.screenshot_base64:
+                assert_screenshot_path = os.path.join(
+                    screenshots_dir, f"c{case_idx}_s{step_idx}_assert.png",
+                )
+                self._save_screenshot(detail.screenshot_base64, assert_screenshot_path)
             return AssertStepData(
                 step_index=step_idx,
                 expectation=step.expectation,
                 severity=step.severity,
-                screenshot="",  # assert 截图需要从 runner 层面捕获
+                screenshot=assert_screenshot_path,
                 result={
                     "passed": detail.passed,
                     "reason": detail.reason,

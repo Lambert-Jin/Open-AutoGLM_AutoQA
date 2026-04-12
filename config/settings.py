@@ -85,3 +85,4 @@ class AssertResult:
     reason: str
     confidence: float = 1.0
     retried: bool = False           # 是否经过容错重试后通过
+    screenshot_base64: str = ""     # 断言时的截图 base64（评测用）

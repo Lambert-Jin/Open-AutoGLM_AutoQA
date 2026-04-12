@@ -176,6 +176,8 @@ class TestRunner:
             print(f"FAIL {sev}(confidence: {result.confidence:.2f}, {duration:.1f}s)")
             print(f"           reason: {result.reason}")
 
+        result.screenshot_base64 = screenshot.base64_data
+
         return StepResult(
             step=step,
             success=result.passed,
