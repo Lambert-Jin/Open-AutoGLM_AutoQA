@@ -100,12 +100,30 @@ class ScreenshotCollector:
                 steps=steps,
             ))
 
+        # 从 round_outputs 累加 token 用量
+        token_usage = self._aggregate_token_usage(cases)
+
         return EvalManifest(
             run_id=run_id,
             suite_name=suite_result.suite_name,
             yaml_path=self.yaml_path,
-            token_usage=TokenUsage(),  # TODO: aggregate from round_outputs
+            token_usage=token_usage,
             cases=cases,
+        )
+
+    @staticmethod
+    def _aggregate_token_usage(cases: list[EvalCaseData]) -> TokenUsage:
+        autoglm_prompt = 0
+        autoglm_completion = 0
+        for case in cases:
+            for step in case.steps:
+                if isinstance(step, ActionStepData):
+                    for rd in step.rounds:
+                        out = rd.model_output
+                        autoglm_prompt += out.get("prompt_tokens", 0)
+                        autoglm_completion += out.get("completion_tokens", 0)
+        return TokenUsage(
+            autoglm=TokenCount(prompt=autoglm_prompt, completion=autoglm_completion),
         )
 
     def _build_step_data(
