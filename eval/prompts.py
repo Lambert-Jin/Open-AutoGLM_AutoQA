@@ -54,10 +54,9 @@ EXECUTOR_EVAL_SYSTEM_PROMPT = """你是一个移动端操作审查员。请分�
 EXECUTOR_EVAL_USER_TEMPLATE = """原始指令: {original_instruction}
 优化后指令: {optimized_instruction}
 执行的操作序列: {actions_taken}
-对话轮数: {rounds}
+实际操作轮数: {rounds}
 
-图1: 操作前的页面截图
-图2: 操作后的页面截图"""
+以下截图按轮次排列，每轮包含操作前和操作后两张截图（仅包含实际执行了操作的轮次，不包含finish轮）："""
 
 PLANNER_EVAL_SYSTEM_PROMPT = """你是一个测试规划评审专家。
 

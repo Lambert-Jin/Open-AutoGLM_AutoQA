@@ -41,27 +41,27 @@ class ExecutorEval:
         return {"summary": summary, "details": details}
 
     def _evaluate_step(self, step: ActionStepData) -> dict:
+        # 只收集 do(action) 轮次的前后截图，跳过 finish 轮
+        action_rounds = [
+            rd for rd in step.rounds
+            if rd.screenshot_after  # finish 轮 after 为空，自然过滤掉
+        ]
+
         user_text = EXECUTOR_EVAL_USER_TEMPLATE.format(
             original_instruction=step.instruction.original,
             optimized_instruction=step.instruction.optimized,
             actions_taken=json.dumps(step.result.get("actions_taken", []), ensure_ascii=False),
-            rounds=step.result.get("rounds", 0),
+            rounds=len(action_rounds),
         )
 
         content: list[dict] = [{"type": "text", "text": user_text}]
 
-        # 附加操作前后截图：第一轮 before + 最后一个有 after 截图的轮次
-        if step.rounds:
-            before_img = load_image(step.rounds[0].screenshot_before)
+        # 每个 action 轮次附加 before/after 截图对
+        for rd in action_rounds:
+            before_img = load_image(rd.screenshot_before)
+            after_img = load_image(rd.screenshot_after)
             if before_img:
-                content.insert(0, before_img)
-
-            # 找最后一个有 after 截图的轮次（finish 轮 after 为空）
-            after_img = None
-            for rd in reversed(step.rounds):
-                if rd.screenshot_after:
-                    after_img = load_image(rd.screenshot_after)
-                    break
+                content.append(before_img)
             if after_img:
                 content.append(after_img)
 
