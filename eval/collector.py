@@ -166,9 +166,12 @@ class ScreenshotCollector:
             rounds = []
             for i, (before_b64, after_b64) in enumerate(detail.round_screenshots):
                 before_path = os.path.join(screenshots_dir, f"c{case_idx}_s{step_idx}_r{i}_before.png")
-                after_path = os.path.join(screenshots_dir, f"c{case_idx}_s{step_idx}_r{i}_after.png")
                 self._save_screenshot(before_b64, before_path)
-                self._save_screenshot(after_b64, after_path)
+                # finish/should_finish 轮无 after 截图，路径设为空
+                after_path = ""
+                if after_b64:
+                    after_path = os.path.join(screenshots_dir, f"c{case_idx}_s{step_idx}_r{i}_after.png")
+                    self._save_screenshot(after_b64, after_path)
                 output = detail.round_outputs[i] if i < len(detail.round_outputs) else {}
                 rounds.append(RoundData(
                     screenshot_before=before_path,
